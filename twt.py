@@ -246,7 +246,7 @@ class TwtClient:
                 elif tweet_info['__typename'] == 'TweetWithVisibilityResults':
                     tweet_info = tweet_info['tweet']
 
-                user_info = find_single_key_opt(tweet_info, 'user_results', ignore=['quoted_status_result'])['result']
+                user_info = find_single_key_opt(tweet_info, 'user_results', ignore=['quoted_status_result', 'additional_media_info'])['result']
 
                 if not user_info:
                     continue
