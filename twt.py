@@ -9,6 +9,7 @@ import json
 import browser_cookie3
 import datetime
 import argparse
+import os
 from urllib.parse import urlencode, urlparse
 from dataclasses import dataclass
 from collections.abc import AsyncGenerator
@@ -73,6 +74,29 @@ DEFAULT_FEATURES = {
     'view_counts_everywhere_api_enabled': True
 }
 
+DEFAULT_VARIABLES = {
+    'count': 5,
+    'withSafetyModeUserFields': True,
+    'includePromotedContent': True,
+    'withQuickPromoteEligibilityTweetFields': True,
+    'withVoice': True,
+    'withV2Timeline': True,
+    'withDownvotePerspective': False,
+    'withBirdwatchNotes': True,
+    'withCommunity': True,
+    'withSuperFollowsUserFields': True,
+    'withReactionsMetadata': False,
+    'withReactionsPerspective': False,
+    'withSuperFollowsTweetFields': True,
+    'isMetatagsQuery': False,
+    'withReplays': True,
+    'withClientEventToken': False,
+    'withAttachments': True,
+    'withConversationQueryHighlights': True,
+    'withMessageQueryHighlights': True,
+    'withMessages': True,
+}
+
 def find_key(obj: any, key: str, ignore: list[str] | None = None) -> list:
     """
     Find all values of a given key within a nested dict or list of dicts
@@ -115,6 +139,13 @@ def find_single_key_opt(obj: any, key: str, ignore: list[str] | None = None) -> 
         return None
     else:
         raise ValueError(f"Expected a single value for key '{key}', but found {len(results)} values")
+    
+def find_single_key(obj: any, key: str, ignore: list[str] | None = None) -> dict | None:
+    results = find_key(obj, key, ignore)
+    if len(results) == 1:
+        return results[0]
+    else:
+        raise ValueError(f"Expected a single value for key '{key}', but found {len(results)} values")
 
 class TransactionIdGenerator:
     def __init__(self, user_agent):
@@ -144,6 +175,11 @@ class TransactionIdGenerator:
 @dataclass
 class BlockReason:
     MATCH_KEYWORD = 'kw'
+    SUBSCRIBED_TO = 'sub'
+
+@dataclass
+class MiscKeys:
+    CURRENT_OP = 'rop'
 
 @dataclass
 class TwtCookies:
@@ -157,7 +193,7 @@ class TwtCookies:
         }
 
 @dataclass
-class TweetAuthor:
+class User:
     id: str
     username: str
     handle: str
@@ -165,9 +201,10 @@ class TweetAuthor:
     verified: bool
     created_at: datetime.datetime
     activity_count: int
+    already_blocked: bool
 
     def __eq__(self, other):
-        if isinstance(other, TweetAuthor):
+        if isinstance(other, User):
             return self.id == other.id
         return False
     
@@ -177,7 +214,7 @@ class TweetAuthor:
 @dataclass
 class Tweet:
     id: int
-    author: TweetAuthor
+    author: User
     contents: str
     views: int
     created_at: datetime.datetime
@@ -225,14 +262,24 @@ class TwtClient:
 
         return (r.status_code, content)
 
-    async def block(self, user: TweetAuthor) -> tuple[int, dict]:
+    async def block(self, user: User) -> tuple[int, dict]:
         return await self.v1('blocks/create.json', { 'user_id': user.id })
 
     @staticmethod
-    def res_get_cursor(data: list[dict]):
-        for e in find_key(data, 'content'):
-            if e.get('cursorType') == 'Bottom':
-                return e['value']
+    def parse_user(raw: dict) -> User:
+        return User(
+            id=raw['rest_id'],
+            username=raw['legacy']['name'],
+            handle=raw['legacy']['screen_name'],
+            description=raw['legacy']['description'],
+            verified=raw['legacy']['verified'],
+            created_at=datetime.datetime.strptime(
+                raw['legacy']['created_at'],
+                '%a %b %d %H:%M:%S +0000 %Y'
+            ),
+            activity_count=int(raw['legacy']['statuses_count']),
+            already_blocked=raw['legacy']['blocking'] == True if 'blocking' in raw['legacy'] else False
+        )
             
     @staticmethod
     def parse_tweets(entries: list[dict]) -> list[Tweet]:
@@ -251,22 +298,9 @@ class TwtClient:
                 if not user_info:
                     continue
 
-                author = TweetAuthor(
-                    id=int(user_info['rest_id']),
-                    username=user_info['legacy']['name'],
-                    handle=user_info['legacy']['screen_name'],
-                    description=user_info['legacy']['description'],
-                    verified=user_info['legacy']['verified'],
-                    created_at= datetime.datetime.strptime(
-                        user_info['legacy']['created_at'],
-                        '%a %b %d %H:%M:%S +0000 %Y'
-                    ),
-                    activity_count=int(user_info['legacy']['statuses_count'])
-                )
-
                 tweets.append(Tweet(
                     id=int(tweet_info['rest_id']),
-                    author=author,
+                    author=TwtClient.parse_user(user_info),
                     contents=tweet_info['legacy']['full_text'],
                     views=int(tweet_info['views']['count']) if 'views' in tweet_info and 'count' in tweet_info['views'] else 0,
                     created_at=datetime.datetime.strptime(
@@ -284,7 +318,7 @@ class TwtClient:
         endpoint_url = f'{GQL_API_URL}/nK1dw4oV3k4w5TdtcAdSww/SearchTimeline'
         params = {
             'variables': {
-                'count': 60,
+                'count': 4,
                 'querySource': 'typed_query',
                 'rawQuery': query,
                 'product': category
@@ -293,7 +327,7 @@ class TwtClient:
             'fieldToggles': { 'withArticleRichContentState': False },
         }
 
-        cursor = ''
+        cursor = None
 
         while True:
             if cursor:
@@ -307,17 +341,103 @@ class TwtClient:
                 break
 
             data = r.json()
-            cursor = self.res_get_cursor(data)
-            entries = [y for x in find_key(data, 'entries') for y in x if re.search(r'^(tweet|user)-', y['entryId'])]
+            raw_entries = find_single_key(data, 'entries')
+            entries = [e for e in raw_entries if e['entryId'].startswith('tweet-')]
+            cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
 
-            if len(entries) <= 2: # just cursors
+            if len(entries) == 0 or cursor is None:
                 yield (r.status_code, [ ])
                 break
             else:
                 tweets = self.parse_tweets(entries)
                 yield (r.status_code, tweets)
-            
-    
+
+    async def get_user_by_handle(self, handle: str) -> tuple[int, User | None]:
+        endpoint_url = f'{GQL_API_URL}/sLVLhk0bGj3MVFEKTdax1w/UserByScreenName'
+        headers = self.build_headers(endpoint_url)
+
+        params = {
+            'variables': {
+                'screen_name': handle,
+            },
+            'features': DEFAULT_FEATURES,
+        }
+
+        r = await self.http.get(endpoint_url, headers=headers, params={k: json.dumps(v) for k, v in params.items()})
+
+        if r.status_code == 200:
+            data = r.json()['data']
+            if 'user' not in data:
+                return (200, None)
+            else:
+                return (r.status_code, TwtClient.parse_user(data['user']['result']))
+        else:
+            return (r.status_code, None)
+        
+    async def get_user_by_id(self, id: int) -> tuple[int, User | None]:
+        endpoint_url = f'{GQL_API_URL}/GazOglcBvgLigl3ywt6b3Q/UserByRestId'
+        headers = self.build_headers(endpoint_url)
+
+        params = {
+            'variables': {
+                'userId': id,
+            },
+            'features': DEFAULT_FEATURES,
+        }
+
+        r = await self.http.get(endpoint_url, headers=headers, params={k: json.dumps(v) for k, v in params.items()})
+
+        if r.status_code == 200:
+            data = r.json()['data']
+            if 'user' not in data:
+                return (200, None)
+            else:
+                return (r.status_code, TwtClient.parse_user(data['user']['result']))
+        else:
+            return (r.status_code, None)
+
+    async def fetch_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        endpoint_url = f'{GQL_API_URL}/pd8Tt1qUz1YWrICegqZ8cw/Followers'
+
+        params = {
+            'variables': DEFAULT_VARIABLES | {
+                'userId': user.id,
+                'count': 100,
+            },
+            'features': DEFAULT_FEATURES,
+        }
+
+        cursor = initial_cursor
+
+        while True:
+            if cursor:
+                params['variables']['cursor'] = cursor
+
+            headers = self.build_headers(endpoint_url)
+            r = await self.http.get(endpoint_url, headers=headers, params={k: json.dumps(v) for k, v in params.items()})
+
+            if r.status_code >= 400:
+                yield (r.status_code, [ ], None)
+                break
+
+            data = r.json()
+            raw_entries = find_single_key(data, 'entries')
+            entries = [e for e in raw_entries if e['entryId'].startswith('user-')]
+            cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
+
+            if len(entries) == 0 or cursor is None:
+                yield (r.status_code, [ ], None)
+                break
+            else:
+                def get_udata(e: dict) -> dict:
+                    try:
+                        return e['content']['itemContent']['user_results']['result']
+                    except KeyError as err:
+                        None
+
+                yield (r.status_code, [ self.parse_user(get_udata(e)) for e in entries if get_udata(e) is not None ], cursor)
+
+
 def get_cookies():
     if FETCH_COOKIES_FROM_BROWSER:
         browsers = {
@@ -375,6 +495,14 @@ def init_db():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS misc (
+            key TEXT NOT NULL PRIMARY KEY,
+            tag TEXT NOT NULL,
+            value TEXT
+        )
+    ''')
+
     cursor.close()
     return conn
 
@@ -388,6 +516,81 @@ def save_block(id, name, reason, match):
     ''', (id, name, reason, match))
     cursor.close()
     local_db.commit()
+
+def save_non_blocked_users(users: list[User], reason: str, match: str):
+    cursor = local_db.cursor()
+    for user in users:
+        cursor.execute('''
+            INSERT OR IGNORE INTO users (id, name, reason, match, date, blocked)
+            VALUES (?, ?, ?, ?, date('now'), 0)
+        ''', (user.id, user.handle, reason, match))
+    cursor.close()
+    local_db.commit()
+
+def get_blocked_count_by(reason: str, match: str) -> int:
+    cursor = local_db.cursor()
+    cursor.execute('''
+        SELECT COUNT(*) FROM users WHERE reason = ? AND match = ?
+    ''', (reason, match))
+    count = cursor.fetchone()[0]
+    cursor.close()
+    return count
+
+@dataclass
+class RunningOp:
+    username: str
+    user_id: int
+    cursor: str | None
+
+class OpManager:
+    @staticmethod
+    def open(user: User, cursor: str | None = None):
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            INSERT OR REPLACE INTO misc (key, tag, value)
+            VALUES (?, ?, ?)
+        ''', (MiscKeys.CURRENT_OP, f'{user.handle}/{user.id}', cursor))
+        db_cursor.close()
+        local_db.commit()
+
+    @staticmethod
+    def close():
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            DELETE FROM misc WHERE key = ?
+        ''', (MiscKeys.CURRENT_OP,))
+        db_cursor.close()
+        local_db.commit()
+
+    @staticmethod
+    def update_cursor(cursor: str):
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            UPDATE misc SET value = ? WHERE key = ?
+        ''', (cursor, MiscKeys.CURRENT_OP))
+        db_cursor.close()
+        local_db.commit()
+
+    @staticmethod
+    def get_current() -> RunningOp | None:
+        db_cursor = local_db.cursor()
+        db_cursor.execute('SELECT tag, value FROM misc WHERE key = ?', (MiscKeys.CURRENT_OP,))
+        row = db_cursor.fetchone()
+        db_cursor.close()
+
+        if row:
+            tag, value = row
+            parts = tag.split('/')
+            if len(parts) == 2:
+                username = parts[0]
+                user_id = int(parts[1])
+                return RunningOp(username, user_id, cursor=value)
+            else:
+                print(f"Invalid tag format: {tag}")
+                return None
+        else:
+            return None
+    
 
 def handle_error_code(status_code: int, error: str):
     if status_code == 429:
@@ -416,31 +619,54 @@ def print_stats():
 
     print(f"{daily_count} users blocked today (out of {total_count} total)")
 
-# arg parser
 parser = argparse.ArgumentParser(description="Block users on Twitter based on search keywords.")
-parser.add_argument('query', type=str, help='The search query to find users to block.')
+parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output.')
+
+cmd = parser.add_subparsers(dest='command', required=True)
+
+cmd_kw = cmd.add_parser('kw', help='Block users based on a keyword search.')
+cmd_kw.add_argument('query', type=str, help='The keyword to search for users to block.')
+
+cmd_sub = cmd.add_parser('sub', help='Block users based on a subscription list.')
+sub_params = cmd_sub.add_mutually_exclusive_group(required=True)
+sub_params.add_argument('-n', '--name', type=str, help='The name of the user to block all subscribers of.')
+sub_params.add_argument('-i', '--id', type=str, help='The ID of the user to block all subscribers of.')
+sub_params.add_argument('-c', '--continue', dest='continue_', action='store_true', help='Continue the previous search/block operation if possible.')
 
 args = parser.parse_args()
 
-async def main():
-    print_stats()
-    client = TwtClient(get_cookies())
-    block_sem = trio.Semaphore(MAX_BLOCK_QUEUE_SIZE)
+async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, results: dict, reason: str, match: str):
+    async with queue:
+        try:
+            status_code, res = await client.block(user)
 
+            if status_code == 200:
+                save_block(user.id, user.handle, reason, match)
+
+            results[user.id] = [status_code, res]
+        except Exception as e:
+            results[user.id] = [400, str(e)]
+
+async def handle_error_stack(error_stack: dict[int, str]):
+    should_wait = False
+
+    for status_code, error in error_stack.items():
+        if status_code == 429:
+            should_wait = True
+        elif status_code == 666:
+            print(f"Error while blocking a user: {error}")
+            exit(1)
+        else:
+            handle_error_code(status_code, error)
+            exit(1)
+
+    if should_wait:
+        print("Rate limit exceeded. Waiting for 15 minutes before retrying...")
+        await trio.sleep(15 * 60)
+
+async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
     total_blocked = 0
     total_search = 0
-
-    async def block_task(user: TweetAuthor, results: dict, reason: str, match: str):
-        async with block_sem:
-            try:
-                status_code, res = await client.block(user)
-
-                if status_code == 200:
-                    save_block(user.id, user.handle, reason, match)
-
-                results[user.id] = [status_code, res]
-            except Exception as e:
-                results[user.id] = [400, str(e)]
 
     for category in ['Latest', 'Top']:
         print(f"Querying: {args.query}/{category}...")
@@ -455,49 +681,129 @@ async def main():
                 handle_error_code(status_code, "Failed to fetch tweets")
                 exit(1)
 
-            results = { }
-            authors = { tweet.author.id: tweet.author for tweet in tweets }
+            authors = { tweet.author.id: tweet.author for tweet in tweets if tweet.author.already_blocked is False }
 
             if len(authors) == 0:
                 continue
 
-            async with trio.open_nursery() as nursery:
-                for author in authors.values():
-                    nursery.start_soon(block_task, author, results, BlockReason.MATCH_KEYWORD, args.query)
+            if args.verbose:
+                print(f"[kw/{category}] Fetched {len(authors)} new tweet authors")
 
-            error_stack = { }
+            while len(authors):
+                results = { }
 
-            for author_id, author in list(authors.items()):
-                if author_id in results:
-                    status_code, res = results[author_id]
-                    if status_code == 200:
-                        total_blocked += 1
-                        print(f"  * blocked {author.id:>19} @{author.handle:<16} (created on {author.created_at:%d/%m/%Y} - {author.activity_count:>6} posts)")
-                        authors.pop(author_id)
+                async with trio.open_nursery() as nursery:
+                    for author in authors.values():
+                        nursery.start_soon(block_task, client, queue, author, results, BlockReason.MATCH_KEYWORD, args.query)
+
+                error_stack = { }
+
+                for author_id, author in list(authors.items()):
+                    if author_id in results:
+                        status_code, res = results[author_id]
+                        if status_code == 200:
+                            total_blocked += 1
+                            print(f"  * blocked {author.id:>19} @{author.handle:<16} (created on {author.created_at:%d/%m/%Y} - {author.activity_count:>6} posts)")
+                            authors.pop(author_id)
+                        else:
+                            error_stack[status_code] = res
                     else:
-                        error_stack[status_code] = res
-                else:
-                    print(f"Error: No task result for user {author.handle} (ID: {author_id})")
-                    exit(1)
-            
-            should_wait = False
-
-            for status_code, error in error_stack.items():
-                if status_code == 429:
-                    should_wait = True
-                elif status_code == 666:
-                    print(f"Error while blocking a user: {error}")
-                    exit(1)
-                else:
-                    handle_error_code(status_code, error)
-                    exit(1)
-
-            if should_wait:
-                print("Rate limit exceeded. Waiting for 15 minutes before retrying...")
-                await trio.sleep(15 * 60)
+                        print(f"Error: No task result for user {author.handle} (ID: {author_id})")
+                        exit(1)
+                
+                await handle_error_stack(error_stack)
     
     if total_blocked > 0:
         print(f"\nBlocked {total_blocked} users using {total_search} search call.")
+
+async def cmd_sub(client: TwtClient, queue: trio.Semaphore):
+    initial_cursor = None
+
+    if args.continue_:
+        current_op = OpManager.get_current()
+        if current_op is None:
+            print("No previous operation found. Please specify a user to block subscribers of.")
+            exit(1)
+        else:
+            res_code, target_user = await client.get_user_by_id(int(current_op.user_id))
+            initial_cursor = current_op.cursor
+    elif args.name:
+        res_code, target_user = await client.get_user_by_handle(args.name.strip('@'))
+    else:
+        res_code, target_user = await client.get_user_by_id(int(args.id))
+
+    if res_code != 200:
+        handle_error_code(res_code, 'Failed to fetch user information')
+        exit(1)
+    elif target_user is None:
+        print(f"User not found: {args.name or args.id}")
+        exit(1)
+
+    if initial_cursor is None:
+        print(f"Fetching followers of @{target_user.handle} ({target_user.id})...")
+        OpManager.open(target_user)
+    else:
+        current_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
+        print(f"Continuing previous blocking operation for @{target_user.handle} ({target_user.id})...")
+        print(f"  * Already blocked {current_count} followers")
+
+    total_blocked = 0
+
+    async for status_code, raw_followers, current_cursor in client.fetch_followers(target_user, initial_cursor):
+        if status_code == 429:
+            print("Rate limit exceeded. Waiting for 15 minutes before retrying...")
+            await trio.sleep(15 * 60)
+            continue
+        elif status_code >= 400:
+            handle_error_code(status_code, "Failed to fetch tweets")
+            exit(1)
+
+        followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
+
+        if len(followers) == 0:
+            OpManager.close()
+            block_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
+            print(f"End of the follower list reached, blocked {block_count} users.")
+            break
+
+        if args.verbose:
+            print(f"[sub/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor})")
+
+        while len(followers):
+            results = { }
+
+            async with trio.open_nursery() as nursery:
+                for follower in followers.values():
+                    nursery.start_soon(block_task, client, queue, follower, results, BlockReason.SUBSCRIBED_TO, target_user.handle)
+            
+            error_stack = { }
+
+            for uid, follower in list(followers.items()):
+                if uid in results:
+                    status_code, res = results[uid]
+                    if status_code == 200:
+                        total_blocked += 1
+                        print(f"  * blocked {follower.id:>19} @{follower.handle:<16} (created on {follower.created_at:%d/%m/%Y} - {follower.activity_count:>6} posts)")
+                        followers.pop(uid)
+                    else:
+                        error_stack[status_code] = res
+                else:
+                    print(f"Error: No task result for user {follower.handle} (ID: {uid})")
+                    exit(1)
+            
+            await handle_error_stack(error_stack)
+
+        OpManager.update_cursor(current_cursor)
+
+async def main():
+    print_stats()
+    client = TwtClient(get_cookies())
+    block_sem = trio.Semaphore(MAX_BLOCK_QUEUE_SIZE)
+
+    if args.command == 'kw':
+        await cmd_kw(client, block_sem)
+    elif args.command == 'sub':
+        await cmd_sub(client, block_sem)
 
 if __name__ == "__main__":
     trio.run(main)
