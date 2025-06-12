@@ -175,7 +175,7 @@ class TransactionIdGenerator:
 @dataclass
 class BlockReason:
     MATCH_KEYWORD = 'kw'
-    SUBSCRIBED_TO = 'sub'
+    SUBSCRIBED_TO = 'fw'
 
 @dataclass
 class MiscKeys:
@@ -627,11 +627,11 @@ cmd = parser.add_subparsers(dest='command', required=True)
 cmd_kw = cmd.add_parser('kw', help='Block users based on a keyword search.')
 cmd_kw.add_argument('query', type=str, help='The keyword to search for users to block.')
 
-cmd_sub = cmd.add_parser('sub', help='Block users based on a subscription list.')
-sub_params = cmd_sub.add_mutually_exclusive_group(required=True)
-sub_params.add_argument('-n', '--name', type=str, help='The name of the user to block all subscribers of.')
-sub_params.add_argument('-i', '--id', type=str, help='The ID of the user to block all subscribers of.')
-sub_params.add_argument('-c', '--continue', dest='continue_', action='store_true', help='Continue the previous search/block operation if possible.')
+cmd_fw = cmd.add_parser('fw', help='Block followers of a given user.')
+fw_params = cmd_fw.add_mutually_exclusive_group(required=True)
+fw_params.add_argument('-n', '--name', type=str, help='The target user handle')
+fw_params.add_argument('-i', '--id', type=str, help='The target user ID')
+fw_params.add_argument('-c', '--continue', dest='continue_', action='store_true', help='Continue the previous search/block operation if possible.')
 
 args = parser.parse_args()
 
@@ -716,13 +716,13 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
     if total_blocked > 0:
         print(f"\nBlocked {total_blocked} users using {total_search} search call.")
 
-async def cmd_sub(client: TwtClient, queue: trio.Semaphore):
+async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
     initial_cursor = None
 
     if args.continue_:
         current_op = OpManager.get_current()
         if current_op is None:
-            print("No previous operation found. Please specify a user to block subscribers of.")
+            print("No previous operation found. Please specify a new user.")
             exit(1)
         else:
             res_code, target_user = await client.get_user_by_id(int(current_op.user_id))
@@ -767,7 +767,7 @@ async def cmd_sub(client: TwtClient, queue: trio.Semaphore):
             break
 
         if args.verbose:
-            print(f"[sub/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor})")
+            print(f"[fw/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor})")
 
         while len(followers):
             results = { }
@@ -802,8 +802,8 @@ async def main():
 
     if args.command == 'kw':
         await cmd_kw(client, block_sem)
-    elif args.command == 'sub':
-        await cmd_sub(client, block_sem)
+    elif args.command == 'fw':
+        await cmd_fw(client, block_sem)
 
 if __name__ == "__main__":
     trio.run(main)
