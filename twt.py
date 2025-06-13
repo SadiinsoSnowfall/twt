@@ -493,7 +493,11 @@ def init_db():
             reason TEXT NOT NULL,
             match TEXT NOT NULL,
             date TEXT NOT NULL,
-            blocked INTEGER NOT NULL DEFAULT 0
+            blocked INTEGER NOT NULL DEFAULT 0,
+            premium INT DEFAULT NULL,
+            creation_date TEXT DEFAULT NULL,
+            posts INT DEFAULT NULL,
+            followers INT DEFAULT NULL
         )
     ''')
 
@@ -511,12 +515,12 @@ def init_db():
 
 local_db = init_db()
 
-def save_block(id, name, reason, match):
+def save_block(user: User, reason: str, match: str):
     cursor =  local_db.cursor()
     cursor.execute('''
-        INSERT OR IGNORE INTO users (id, name, reason, match, date, blocked)
-        VALUES (?, ?, ?, ?, date('now'), 1)
-    ''', (id, name, reason, match))
+        INSERT OR IGNORE INTO users (id, name, reason, match, premium, creation_date, posts, followers, date, blocked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, date('now'), 1)
+    ''', (user.id, user.handle, reason, match, user.verified, f"{user.created_at:%d/%m/%Y}", user.activity_count, user.followers_count))
     cursor.close()
     local_db.commit()
 
@@ -599,9 +603,9 @@ def handle_error_code(status_code: int, error: str):
     if status_code == 429:
         print(f"Rate limit exceeded, please wait for ~15 minutes...")
     elif status_code == 401:
-        print(f"--- Unauthorized access, please re-authenticate")
+        print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout")
     elif status_code == 403:
-        print(f"--- Forbidden access, please re-authenticate (captcha ?)")
+        print(f"--- Forbidden access, please re-authenticate (captcha ?): https://x.com/logout")
     elif status_code == 404:
         print(f"Resource not found: {error}")
     elif status_code == 500:
@@ -644,7 +648,7 @@ async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, resul
             status_code, res = await client.block(user)
 
             if status_code == 200:
-                save_block(user.id, user.handle, reason, match)
+                save_block(user, reason, match)
 
             results[user.id] = [status_code, res]
         except Exception as e:
@@ -763,13 +767,15 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             handle_error_code(status_code, "Failed to fetch tweets")
             exit(1)
 
-        followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
-
-        if len(followers) == 0:
+        if len(raw_followers) == 0:
             OpManager.close()
             block_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
             print(f"End of the follower list reached, blocked {block_count} users.")
             break
+
+        followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
+        if len(followers) == 0:
+            continue
 
         if args.verbose:
             print(f"[fw/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor})")
