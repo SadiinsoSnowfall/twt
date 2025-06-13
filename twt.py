@@ -201,6 +201,7 @@ class User:
     verified: bool
     created_at: datetime.datetime
     activity_count: int
+    followers_count: int
     already_blocked: bool
 
     def __eq__(self, other):
@@ -268,7 +269,7 @@ class TwtClient:
     @staticmethod
     def parse_user(raw: dict) -> User:
         return User(
-            id=raw['rest_id'],
+            id=int(raw['rest_id']),
             username=raw['legacy']['name'],
             handle=raw['legacy']['screen_name'],
             description=raw['legacy']['description'],
@@ -278,6 +279,7 @@ class TwtClient:
                 '%a %b %d %H:%M:%S +0000 %Y'
             ),
             activity_count=int(raw['legacy']['statuses_count']),
+            followers_count=int(raw['legacy']['followers_count']),
             already_blocked=raw['legacy']['blocking'] == True if 'blocking' in raw['legacy'] else False
         )
             
@@ -499,7 +501,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS misc (
             key TEXT NOT NULL PRIMARY KEY,
             tag TEXT NOT NULL,
-            value TEXT
+            value TEXT,
+            ext TEXT
         )
     ''')
 
@@ -718,15 +721,14 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
 
 async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
     initial_cursor = None
+    current_op = OpManager.get_current()
 
     if args.continue_:
-        current_op = OpManager.get_current()
         if current_op is None:
             print("No previous operation found. Please specify a new user.")
             exit(1)
         else:
             res_code, target_user = await client.get_user_by_id(int(current_op.user_id))
-            initial_cursor = current_op.cursor
     elif args.name:
         res_code, target_user = await client.get_user_by_handle(args.name.strip('@'))
     else:
@@ -739,13 +741,16 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
         print(f"User not found: {args.name or args.id}")
         exit(1)
 
+    if current_op is not None and target_user.id == current_op.user_id:
+        initial_cursor = current_op.cursor
+
     if initial_cursor is None:
         print(f"Fetching followers of @{target_user.handle} ({target_user.id})...")
         OpManager.open(target_user)
     else:
         current_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
         print(f"Continuing previous blocking operation for @{target_user.handle} ({target_user.id})...")
-        print(f"  * Already blocked {current_count} followers")
+        print(f"  * Already blocked {current_count} followers out of {target_user.followers_count} ({current_count / target_user.followers_count * 100:.2f}%)")
 
     total_blocked = 0
 
