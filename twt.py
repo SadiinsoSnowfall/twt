@@ -33,6 +33,8 @@ LOCAL_COOKIES = {
 FETCH_COOKIES_FROM_BROWSER = True
 PREFFERED_BROWSER = 'safari'
 
+THROTTLE_TIMEOUT = 15 * 60
+
 DEFAULT_FEATURES = {
     'c9s_tweet_anatomy_moderator_badge_enabled': True,
     'responsive_web_home_pinned_timelines_enabled': True,
@@ -191,6 +193,9 @@ class TwtCookies:
             'ct0': self.ct0,
             'auth_token': self.auth_token
         }
+    
+    def is_empty(self) -> bool:
+        return not self.ct0 or not self.auth_token
 
 @dataclass
 class User:
@@ -315,6 +320,17 @@ class TwtClient:
                 exit(1)
         
         return tweets
+    
+    async def await_cookies_update(self):
+        while True:
+            nc = get_cookies(allows_none=True)
+
+            if nc.is_empty() or nc == self.cookies:
+                await trio.sleep(1)
+            else:
+                self.cookies = nc
+                trio.sleep(0)
+                break
 
     async def search(self, query: str, category: str) -> AsyncGenerator[tuple[int, list[Tweet]], None]:
         endpoint_url = f'{GQL_API_URL}/nK1dw4oV3k4w5TdtcAdSww/SearchTimeline'
@@ -340,7 +356,7 @@ class TwtClient:
 
             if r.status_code >= 400:
                 yield (r.status_code, [ ])
-                break
+                continue
 
             data = r.json()
             raw_entries = find_single_key(data, 'entries')
@@ -420,7 +436,7 @@ class TwtClient:
 
             if r.status_code >= 400:
                 yield (r.status_code, [ ], None)
-                break
+                continue
 
             data = r.json()
             raw_entries = find_single_key(data, 'entries')
@@ -440,7 +456,7 @@ class TwtClient:
                 yield (r.status_code, [ self.parse_user(get_udata(e)) for e in entries if get_udata(e) is not None ], cursor)
 
 
-def get_cookies():
+def get_cookies(allows_none: bool = False) -> TwtCookies:
     if FETCH_COOKIES_FROM_BROWSER:
         browsers = {
             'safari': browser_cookie3.safari,
@@ -462,6 +478,8 @@ def get_cookies():
 
                 if auth_token and ct0:
                     return TwtCookies(ct0, auth_token)
+                elif allows_none:
+                    return TwtCookies(ct0='', auth_token='')
                 else:
                     print(f"Cookies 'ct0' and 'auth_token' not found in {PREFFERED_BROWSER}.")
                     exit(1)
@@ -597,12 +615,9 @@ class OpManager:
                 return None
         else:
             return None
-    
 
-def handle_error_code(status_code: int, error: str):
-    if status_code == 429:
-        print(f"Rate limit exceeded, please wait for ~15 minutes...")
-    elif status_code == 401:
+def handle_error_code_internal(status_code: int, error: str):
+    if status_code == 401:
         print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout")
     elif status_code == 403:
         print(f"--- Forbidden access, please re-authenticate (captcha ?): https://x.com/logout")
@@ -612,6 +627,57 @@ def handle_error_code(status_code: int, error: str):
         print(f"Internal server error: {error}")
     else:
         print(f"Unexpected error (status code {status_code}): {error}")
+
+async def handle_error_code(client: TwtClient, status_code: int, error: str) -> bool:
+    if status_code == 429:
+        print("--- Rate limit exceeded, waiting a bit...") 
+        await trio.sleep(THROTTLE_TIMEOUT)
+        return True
+    elif (status_code == 401 or status_code == 403):
+        print("--- Unauthorized access, please re-authenticate: https://x.com/logout")
+        await client.await_cookies_update()
+        return True
+    elif status_code >= 400:
+        handle_error_code_internal(status_code, error)
+        exit(1)
+    else:
+        await trio.sleep(0)
+        return False
+
+async def handle_error_stack(client: TwtClient, error_stack: dict[int, str]):
+    should_wait = False
+    should_refresh_cookies = False
+
+    for status_code, error in error_stack.items():
+        if status_code == 429:
+            should_wait = True
+        elif status_code == 666:
+            print(f"Error while blocking a user: {error}")
+            exit(1)
+        elif status_code == 401 or status_code == 403:
+            should_refresh_cookies = True
+        else:
+            handle_error_code_internal(status_code, error)
+            exit(1)
+
+    if should_refresh_cookies:
+        print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout")
+        await client.await_cookies_update()
+    elif should_wait:
+        print("--- Rate limit exceeded, waiting a bit...") 
+        await trio.sleep(THROTTLE_TIMEOUT)
+
+async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, results: dict, reason: str, match: str):
+    async with queue:
+        try:
+            status_code, res = await client.block(user)
+
+            if status_code == 200:
+                save_block(user, reason, match)
+
+            results[user.id] = [status_code, res]
+        except Exception as e:
+            results[user.id] = [400, str(e)]
 
 def print_stats():
     cursor = local_db.cursor()
@@ -642,35 +708,6 @@ fw_params.add_argument('-c', '--continue', dest='continue_', action='store_true'
 
 args = parser.parse_args()
 
-async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, results: dict, reason: str, match: str):
-    async with queue:
-        try:
-            status_code, res = await client.block(user)
-
-            if status_code == 200:
-                save_block(user, reason, match)
-
-            results[user.id] = [status_code, res]
-        except Exception as e:
-            results[user.id] = [400, str(e)]
-
-async def handle_error_stack(error_stack: dict[int, str]):
-    should_wait = False
-
-    for status_code, error in error_stack.items():
-        if status_code == 429:
-            should_wait = True
-        elif status_code == 666:
-            print(f"Error while blocking a user: {error}")
-            exit(1)
-        else:
-            handle_error_code(status_code, error)
-            exit(1)
-
-    if should_wait:
-        print("Rate limit exceeded. Waiting for 15 minutes before retrying...")
-        await trio.sleep(15 * 60)
-
 async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
     total_blocked = 0
     total_search = 0
@@ -678,16 +715,10 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
     for category in ['Latest', 'Top']:
         print(f"Querying: {args.query}/{category}...")
         async for status_code, tweets in client.search(args.query, category):
-            total_search += 1
-
-            if status_code == 429:
-                print("Rate limit exceeded. Waiting for 15 minutes before retrying...")
-                await trio.sleep(15 * 60)
+            if await handle_error_code(client, status_code, "Failed to fetch tweets"):
                 continue
-            elif status_code >= 400:
-                handle_error_code(status_code, "Failed to fetch tweets")
-                exit(1)
 
+            total_search += 1
             authors = { tweet.author.id: tweet.author for tweet in tweets if tweet.author.already_blocked is False }
 
             if len(authors) == 0:
@@ -718,7 +749,7 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
                         print(f"Error: No task result for user {author.handle} (ID: {author_id})")
                         exit(1)
                 
-                await handle_error_stack(error_stack)
+                await handle_error_stack(client, error_stack)
     
     if total_blocked > 0:
         print(f"\nBlocked {total_blocked} users using {total_search} search call.")
@@ -726,24 +757,28 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
 async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
     initial_cursor = None
     current_op = OpManager.get_current()
+    target_user = None
 
-    if args.continue_:
-        if current_op is None:
-            print("No previous operation found. Please specify a new user.")
+    while True:
+        if args.continue_:
+            if current_op is None:
+                print("No previous operation found. Please specify a new user.")
+                exit(1)
+            else:
+                res_code, target_user = await client.get_user_by_id(int(current_op.user_id))
+        elif args.name:
+            res_code, target_user = await client.get_user_by_handle(args.name.strip('@'))
+        else:
+            res_code, target_user = await client.get_user_by_id(int(args.id))
+
+        if await handle_error_code(client, res_code, 'Failed to fetch user information'):
+            continue
+
+        if target_user is None:
+            print(f"User not found: {args.name or args.id}")
             exit(1)
         else:
-            res_code, target_user = await client.get_user_by_id(int(current_op.user_id))
-    elif args.name:
-        res_code, target_user = await client.get_user_by_handle(args.name.strip('@'))
-    else:
-        res_code, target_user = await client.get_user_by_id(int(args.id))
-
-    if res_code != 200:
-        handle_error_code(res_code, 'Failed to fetch user information')
-        exit(1)
-    elif target_user is None:
-        print(f"User not found: {args.name or args.id}")
-        exit(1)
+            break
 
     if current_op is not None and target_user.id == current_op.user_id:
         initial_cursor = current_op.cursor
@@ -759,13 +794,8 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
     total_blocked = 0
 
     async for status_code, raw_followers, current_cursor in client.fetch_followers(target_user, initial_cursor):
-        if status_code == 429:
-            print("Rate limit exceeded. Waiting for 15 minutes before retrying...")
-            await trio.sleep(15 * 60)
+        if await handle_error_code(client, status_code, "Failed to fetch followers"):
             continue
-        elif status_code >= 400:
-            handle_error_code(status_code, "Failed to fetch tweets")
-            exit(1)
 
         if len(raw_followers) == 0:
             OpManager.close()
@@ -802,7 +832,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
                     print(f"Error: No task result for user {follower.handle} (ID: {uid})")
                     exit(1)
             
-            await handle_error_stack(error_stack)
+            await handle_error_stack(client, error_stack)
 
         OpManager.update_cursor(current_cursor)
 
