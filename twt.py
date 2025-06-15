@@ -4,12 +4,10 @@ import requests
 import trio
 import sqlite3
 import httpx
-import re
 import json
 import browser_cookie3
 import datetime
 import argparse
-import os
 from urllib.parse import urlencode, urlparse
 from dataclasses import dataclass
 from collections.abc import AsyncGenerator
@@ -543,7 +541,7 @@ def save_block(user: User, reason: str, match: str):
     cursor.execute('''
         INSERT OR IGNORE INTO users (id, name, reason, match, premium, creation_date, posts, followers, date, blocked)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, date('now'), 1)
-    ''', (user.id, user.handle, reason, match, user.verified, f"{user.created_at:%d/%m/%Y}", user.activity_count, user.followers_count))
+    ''', (user.id, user.handle, reason, match, user.verified, f"{user.created_at:%Y-%m-%d}", user.activity_count, user.followers_count))
     cursor.close()
     local_db.commit()
 
