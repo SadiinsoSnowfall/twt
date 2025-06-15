@@ -322,14 +322,19 @@ class TwtClient:
         return tweets
     
     async def await_cookies_update(self):
+        if args.ring:
+            for  _ in range(3):
+                print('\a', end='', flush=True)
+                await trio.sleep(0.1)
+
         while True:
             nc = get_cookies(allows_none=True)
 
             if nc.is_empty() or nc == self.cookies:
-                await trio.sleep(1)
+                await trio.sleep(0.5)
             else:
                 self.cookies = nc
-                trio.sleep(0)
+                await trio.sleep(0)
                 break
 
     async def search(self, query: str, category: str) -> AsyncGenerator[tuple[int, list[Tweet]], None]:
@@ -694,6 +699,7 @@ def print_stats():
 
 parser = argparse.ArgumentParser(description="Block users on Twitter based on search keywords.")
 parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output.')
+parser.add_argument('-r', '--ring', action='store_true', help='Ring when user action is required.')
 
 cmd = parser.add_subparsers(dest='command', required=True)
 
