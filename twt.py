@@ -17,7 +17,7 @@ from x_client_transaction import ClientTransaction
 
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
 
-MAX_BLOCK_QUEUE_SIZE = 10
+MAX_BLOCK_QUEUE_SIZE = 100
 
 GQL_API_URL = 'https://twitter.com/i/api/graphql'
 V1_API_URL = 'https://api.twitter.com/1.1'
@@ -34,44 +34,59 @@ PREFFERED_BROWSER = 'safari'
 THROTTLE_TIMEOUT = 15 * 60
 
 DEFAULT_FEATURES = {
-    'c9s_tweet_anatomy_moderator_badge_enabled': True,
-    'responsive_web_home_pinned_timelines_enabled': True,
-    'blue_business_profile_image_shape_enabled': True,
-    'creator_subscriptions_tweet_preview_api_enabled': True,
-    'freedom_of_speech_not_reach_fetch_enabled': True,
-    'graphql_is_translatable_rweb_tweet_is_translatable_enabled': True,
-    'graphql_timeline_v2_bookmark_timeline': True,
-    'hidden_profile_likes_enabled': True,
-    'highlights_tweets_tab_ui_enabled': True,
-    'interactive_text_enabled': True,
-    'longform_notetweets_consumption_enabled': True,
-    'longform_notetweets_inline_media_enabled': True,
-    'longform_notetweets_rich_text_read_enabled': True,
-    'longform_notetweets_richtext_consumption_enabled': True,
-    'profile_foundations_tweet_stats_enabled': True,
-    'profile_foundations_tweet_stats_tweet_frequency': True,
-    'responsive_web_birdwatch_note_limit_enabled': True,
-    'responsive_web_edit_tweet_api_enabled': True,
-    'responsive_web_enhance_cards_enabled': False,
-    'responsive_web_graphql_exclude_directive_enabled': True,
-    'responsive_web_graphql_skip_user_profile_image_extensions_enabled': False,
-    'responsive_web_graphql_timeline_navigation_enabled': True,
-    'responsive_web_media_download_video_enabled': False,
-    'responsive_web_text_conversations_enabled': False,
-    'responsive_web_twitter_article_data_v2_enabled': True,
-    'responsive_web_twitter_article_tweet_consumption_enabled': False,
-    'responsive_web_twitter_blue_verified_badge_is_enabled': True,
-    'rweb_lists_timeline_redesign_enabled': True,
-    'spaces_2022_h2_clipping': True,
-    'spaces_2022_h2_spaces_communities': True,
-    'standardized_nudges_misinfo': True,
-    'subscriptions_verification_info_verified_since_enabled': True,
-    'tweet_awards_web_tipping_enabled': False,
-    'tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled': True,
-    'tweetypie_unmention_optimization_enabled': True,
-    'verified_phone_label_enabled': False,
-    'vibe_api_enabled': True,
-    'view_counts_everywhere_api_enabled': True
+    "articles_preview_enabled": True,
+    "blue_business_profile_image_shape_enabled": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "creator_subscriptions_quote_tweet_preview_enabled": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "graphql_timeline_v2_bookmark_timeline": True,
+    "hidden_profile_likes_enabled": True,
+    "highlights_tweets_tab_ui_enabled": True,
+    "interactive_text_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "longform_notetweets_inline_media_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_richtext_consumption_enabled": True,
+    "payments_enabled": False,
+    "premium_content_api_read_enabled": False,
+    "profile_foundations_tweet_stats_enabled": True,
+    "profile_foundations_tweet_stats_tweet_frequency": True,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "responsive_web_birdwatch_note_limit_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "responsive_web_enhance_cards_enabled": False,
+    "responsive_web_graphql_exclude_directive_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "responsive_web_grok_analysis_button_from_backend": False,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+    "responsive_web_grok_analyze_post_followups_enabled": True,
+    "responsive_web_grok_image_annotation_enabled": True,
+    "responsive_web_grok_share_attachment_enabled": True,
+    "responsive_web_grok_show_grok_translated_post": False,
+    "responsive_web_home_pinned_timelines_enabled": True,
+    "responsive_web_jetfuel_frame": False,
+    "responsive_web_media_download_video_enabled": False,
+    "responsive_web_text_conversations_enabled": False,
+    "responsive_web_twitter_article_data_v2_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": False,
+    "responsive_web_twitter_blue_verified_badge_is_enabled": True,
+    "rweb_lists_timeline_redesign_enabled": True,
+    "rweb_tipjar_consumption_enabled": True,
+    "rweb_video_screen_enabled": False,
+    "spaces_2022_h2_clipping": True,
+    "spaces_2022_h2_spaces_communities": True,
+    "standardized_nudges_misinfo": True,
+    "subscriptions_verification_info_verified_since_enabled": True,
+    "tweet_awards_web_tipping_enabled": False,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "tweetypie_unmention_optimization_enabled": True,
+    "verified_phone_label_enabled": False,
+    "vibe_api_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
 }
 
 DEFAULT_VARIABLES = {
@@ -96,6 +111,19 @@ DEFAULT_VARIABLES = {
     'withMessageQueryHighlights': True,
     'withMessages': True,
 }
+
+def elapsed_ms(r: httpx.Response) -> str:
+    elapsed = r.elapsed.total_seconds() * 1000
+    return f"{elapsed:.0f}ms"
+
+def get_safe(raw: dict, path: list[str]) -> any:
+    for key in path:
+        if key in raw:
+            raw = raw[key]
+        else:
+            return None
+        
+    return raw
 
 def find_key(obj: any, key: str, ignore: list[str] | None = None) -> list:
     """
@@ -178,10 +206,6 @@ class BlockReason:
     SUBSCRIBED_TO = 'fw'
 
 @dataclass
-class MiscKeys:
-    CURRENT_OP = 'rop'
-
-@dataclass
 class TwtCookies:
     ct0: str
     auth_token: str
@@ -253,7 +277,7 @@ class TwtClient:
             'x-client-transaction-id': self.tid_generator.generate_tid(url, method),
         }
     
-    async def v1(self, path: str, params: dict) -> tuple[int, dict]:
+    async def v1(self, path: str, params: dict) -> tuple[int, dict, httpx.Response]:
         url = f'{V1_API_URL}/{path}'
         headers = self.build_headers(url, content_type='application/x-www-form-urlencoded', method='POST')
 
@@ -264,27 +288,48 @@ class TwtClient:
         except:
             content = { }
 
-        return (r.status_code, content)
+        return (r.status_code, content, r)
 
-    async def block(self, user: User) -> tuple[int, dict]:
+    async def block(self, user: User) -> tuple[int, dict, httpx.Response]:
         return await self.v1('blocks/create.json', { 'user_id': user.id })
 
     @staticmethod
     def parse_user(raw: dict) -> User:
-        return User(
-            id=int(raw['rest_id']),
-            username=raw['legacy']['name'],
-            handle=raw['legacy']['screen_name'],
-            description=raw['legacy']['description'],
-            verified=raw['legacy']['verified'],
-            created_at=datetime.datetime.strptime(
-                raw['legacy']['created_at'],
-                '%a %b %d %H:%M:%S +0000 %Y'
-            ),
-            activity_count=int(raw['legacy']['statuses_count']),
-            followers_count=int(raw['legacy']['followers_count']),
-            already_blocked=raw['legacy']['blocking'] == True if 'blocking' in raw['legacy'] else False
-        )
+        try:
+            username = get_safe(raw, ['legacy', 'name']) or get_safe(raw, ['core', 'name'])
+            handle = get_safe(raw, ['legacy', 'screen_name']) or get_safe(raw, ['core', 'screen_name'])
+            description = get_safe(raw, ['legacy', 'description']) or ''
+            created_at = get_safe(raw, ['legacy', 'created_at']) or get_safe(raw, ['core', 'created_at'])
+
+            if not handle:
+                raise ValueError(f"Handle is missing in {raw}")
+            
+            if not created_at:
+                raise ValueError(f"Created at date is missing in {raw}")
+
+            if 'relationship_perspectives' in raw:
+                tmp = raw['relationship_perspectives']
+                already_blocked = tmp['blocking'] if 'blocking' in tmp else False
+            else:
+                already_blocked = raw['legacy']['blocking'] if 'legacy' in raw and 'blocking' in raw['legacy'] else False
+
+            return User(
+                id=int(raw['rest_id']),
+                username=username,
+                handle=handle,
+                description=description,
+                verified=raw['is_blue_verified'],
+                created_at=datetime.datetime.strptime(
+                    created_at,
+                    '%a %b %d %H:%M:%S +0000 %Y'
+                ),
+                activity_count=int(raw['legacy']['statuses_count']),
+                followers_count=int(raw['legacy']['followers_count']),
+                already_blocked=already_blocked
+            )
+        except KeyError as e:
+            print(f"Error parsing user data: {e}, raw data: {raw}") 
+            raise e
             
     @staticmethod
     def parse_tweets(entries: list[dict]) -> list[Tweet]:
@@ -416,14 +461,14 @@ class TwtClient:
                 return (r.status_code, TwtClient.parse_user(data['user']['result']))
         else:
             return (r.status_code, None)
-
-    async def fetch_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
-        endpoint_url = f'{GQL_API_URL}/pd8Tt1qUz1YWrICegqZ8cw/Followers'
+        
+    async def _fetch_followers_inner(self, user: User, endpoint: str, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        endpoint_url = f'{GQL_API_URL}/{endpoint}'
 
         params = {
             'variables': DEFAULT_VARIABLES | {
                 'userId': user.id,
-                'count': 100,
+                'count': 200,
             },
             'features': DEFAULT_FEATURES,
         }
@@ -452,12 +497,44 @@ class TwtClient:
             else:
                 def get_udata(e: dict) -> dict:
                     try:
-                        return e['content']['itemContent']['user_results']['result']
+                        raw = e['content']['itemContent']['user_results']['result']
+                        if raw['__typename'] == 'UserUnavailable':
+                            return None
+                        else:
+                            return self.parse_user(raw)
                     except KeyError as err:
                         None
 
-                yield (r.status_code, [ self.parse_user(get_udata(e)) for e in entries if get_udata(e) is not None ], cursor)
+                entries = [ get_udata(e) for e in entries ]
+                yield (r.status_code, [ u for u in entries if u is not None ], cursor)
 
+    def fetch_verified_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        return self._fetch_followers_inner(user, 'qKjNcwA6qZssapgGkylGdA/BlueVerifiedFollowers', initial_cursor)
+    
+    def fetch_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        return self._fetch_followers_inner(user, 'pd8Tt1qUz1YWrICegqZ8cw/Followers', initial_cursor)
+    
+    async def fetch_mixed_followers(self, user: User, initial_cursor: str | None = None, force_skip_verified: bool = False) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        vtag = 'verified+'
+        had_verified = False
+        
+        if initial_cursor is None:
+            had_verified = True
+        elif initial_cursor.startswith(vtag):
+            had_verified = True
+            initial_cursor = initial_cursor[len(vtag):]
+        
+        if had_verified and not force_skip_verified:
+            async for status_code, raw_followers, cursor in self.fetch_verified_followers(user, initial_cursor):
+                if status_code == 200 and len(raw_followers) == 0:
+                    break
+                elif cursor is None:
+                    yield (status_code, raw_followers, None)
+                else:
+                    yield (status_code, raw_followers, vtag + cursor)
+
+        async for status_code, raw_followers, cursor in self.fetch_followers(user, initial_cursor):
+             yield (status_code, raw_followers, cursor)
 
 def get_cookies(allows_none: bool = False) -> TwtCookies:
     if FETCH_COOKIES_FROM_BROWSER:
@@ -514,7 +591,6 @@ def init_db():
             reason TEXT NOT NULL,
             match TEXT NOT NULL,
             date TEXT NOT NULL,
-            blocked INTEGER NOT NULL DEFAULT 0,
             premium INT DEFAULT NULL,
             creation_date TEXT DEFAULT NULL,
             posts INT DEFAULT NULL,
@@ -523,11 +599,12 @@ def init_db():
     ''')
 
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS misc (
-            key TEXT NOT NULL PRIMARY KEY,
-            tag TEXT NOT NULL,
-            value TEXT,
-            ext TEXT
+        CREATE TABLE IF NOT EXISTS running_ops (
+            id int not null primary key,
+            name text not null,
+            cursor text not null,
+            count int not null default 0,
+            done int not null default 0
         )
     ''')
 
@@ -539,19 +616,9 @@ local_db = init_db()
 def save_block(user: User, reason: str, match: str):
     cursor =  local_db.cursor()
     cursor.execute('''
-        INSERT OR IGNORE INTO users (id, name, reason, match, premium, creation_date, posts, followers, date, blocked)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, date('now'), 1)
+        INSERT INTO users (id, name, reason, match, premium, creation_date, posts, followers, date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, date('now'))
     ''', (user.id, user.handle, reason, match, user.verified, f"{user.created_at:%Y-%m-%d}", user.activity_count, user.followers_count))
-    cursor.close()
-    local_db.commit()
-
-def save_non_blocked_users(users: list[User], reason: str, match: str):
-    cursor = local_db.cursor()
-    for user in users:
-        cursor.execute('''
-            INSERT OR IGNORE INTO users (id, name, reason, match, date, blocked)
-            VALUES (?, ?, ?, ?, date('now'), 0)
-        ''', (user.id, user.handle, reason, match))
     cursor.close()
     local_db.commit()
 
@@ -569,53 +636,89 @@ class RunningOp:
     username: str
     user_id: int
     cursor: str | None
+    count: int
+    done: bool
 
 class OpManager:
     @staticmethod
-    def open(user: User, cursor: str | None = None):
+    def create(user: User, cursor: str | None = None):
         db_cursor = local_db.cursor()
         db_cursor.execute('''
-            INSERT OR REPLACE INTO misc (key, tag, value)
+            INSERT OR REPLACE INTO running_ops (id, name, cursor)
             VALUES (?, ?, ?)
-        ''', (MiscKeys.CURRENT_OP, f'{user.handle}/{user.id}', cursor))
+        ''', (user.id, user.handle, cursor))
         db_cursor.close()
         local_db.commit()
 
+        return RunningOp(username=user.handle, user_id=user.id, cursor=cursor, count=0, done=False)
+
     @staticmethod
-    def close():
+    def set_done(user: User):
         db_cursor = local_db.cursor()
         db_cursor.execute('''
-            DELETE FROM misc WHERE key = ?
-        ''', (MiscKeys.CURRENT_OP,))
+            UPDATE running_ops SET done = 1 WHERE id = ?
+        ''', (user.id,))
         db_cursor.close()
         local_db.commit()
 
     @staticmethod
-    def update_cursor(cursor: str):
+    def update_cursor(user: User, cursor: str):
         db_cursor = local_db.cursor()
         db_cursor.execute('''
-            UPDATE misc SET value = ? WHERE key = ?
-        ''', (cursor, MiscKeys.CURRENT_OP))
+            UPDATE running_ops SET cursor = ? WHERE id = ?
+        ''', (cursor, user.id))
         db_cursor.close()
         local_db.commit()
 
     @staticmethod
-    def get_current() -> RunningOp | None:
+    def increment_count(user: User, count: int):
         db_cursor = local_db.cursor()
-        db_cursor.execute('SELECT tag, value FROM misc WHERE key = ?', (MiscKeys.CURRENT_OP,))
+        db_cursor.execute('''
+            UPDATE running_ops SET count = count + ? WHERE id = ?
+        ''', (count, user.id))
+        db_cursor.close()
+        local_db.commit()
+
+    @staticmethod
+    def update_cursor_and_count(user: User, cursor: str, count: int):
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            UPDATE running_ops SET cursor = ?, count = count + ? WHERE id = ?
+        ''', (cursor, count, user.id))
+        db_cursor.close()
+        local_db.commit()
+
+    @staticmethod
+    def get_with(user: User) -> RunningOp | None:
+        db_cursor = local_db.cursor()
+        db_cursor.execute('SELECT cursor, count, done FROM running_ops WHERE id = ?', (user.id,))
         row = db_cursor.fetchone()
         db_cursor.close()
 
         if row:
-            tag, value = row
-            parts = tag.split('/')
-            if len(parts) == 2:
-                username = parts[0]
-                user_id = int(parts[1])
-                return RunningOp(username, user_id, cursor=value)
-            else:
-                print(f"Invalid tag format: {tag}")
-                return None
+            cursor, count, done = row
+            return RunningOp(username=user.handle, user_id=user.id, cursor=cursor, count=count, done=done)
+        else:
+            return None
+        
+    @staticmethod
+    def get_or_create_with(user: User) -> RunningOp:
+        op = OpManager.get_with(user)
+        if op is None:
+            op = OpManager.create(user)
+
+        return op
+
+    @staticmethod
+    def get_last() -> RunningOp | None:
+        db_cursor = local_db.cursor()
+        db_cursor.execute('SELECT id, name, cursor, count, done FROM running_ops WHERE done = 0 ORDER BY id DESC LIMIT 1')
+        row = db_cursor.fetchone()
+        db_cursor.close()
+
+        if row:
+            user_id, username, cursor, count, done = row
+            return RunningOp(username=username, user_id=int(user_id), cursor=cursor, count=int(count), done=int(done) > 0)
         else:
             return None
 
@@ -637,7 +740,7 @@ async def handle_error_code(client: TwtClient, status_code: int, error: str) -> 
         await trio.sleep(THROTTLE_TIMEOUT)
         return True
     elif (status_code == 401 or status_code == 403):
-        print("--- Unauthorized access, please re-authenticate: https://x.com/logout")
+        print("--- Unauthorized access, please re-authenticate: https://x.com/logout [waiting for cookies update]")
         await client.await_cookies_update()
         return True
     elif status_code >= 400:
@@ -664,7 +767,7 @@ async def handle_error_stack(client: TwtClient, error_stack: dict[int, str]):
             exit(1)
 
     if should_refresh_cookies:
-        print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout")
+        print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout [waiting for cookies update]")
         await client.await_cookies_update()
     elif should_wait:
         print("--- Rate limit exceeded, waiting a bit...") 
@@ -673,14 +776,14 @@ async def handle_error_stack(client: TwtClient, error_stack: dict[int, str]):
 async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, results: dict, reason: str, match: str):
     async with queue:
         try:
-            status_code, res = await client.block(user)
+            status_code, res, raw = await client.block(user)
 
             if status_code == 200:
                 save_block(user, reason, match)
 
-            results[user.id] = [status_code, res]
+            results[user.id] = [status_code, res, raw]
         except Exception as e:
-            results[user.id] = [400, str(e)]
+            results[user.id] = [400, str(e), None]
 
 def print_stats():
     cursor = local_db.cursor()
@@ -705,6 +808,7 @@ cmd_kw = cmd.add_parser('kw', help='Block users based on a keyword search.')
 cmd_kw.add_argument('query', type=str, help='The keyword to search for users to block.')
 
 cmd_fw = cmd.add_parser('fw', help='Block followers of a given user.')
+cmd_fw.add_argument('--skip-premium', action='store_true', help='Skip blocking verified users (premium accounts).')
 fw_params = cmd_fw.add_mutually_exclusive_group(required=True)
 fw_params.add_argument('-n', '--name', type=str, help='The target user handle')
 fw_params.add_argument('-i', '--id', type=str, help='The target user ID')
@@ -759,17 +863,17 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
         print(f"\nBlocked {total_blocked} users using {total_search} search call.")
 
 async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
-    initial_cursor = None
-    current_op = OpManager.get_current()
-    target_user = None
+    target_user: User | None = None
+    current_op: RunningOp | None = None
 
     while True:
         if args.continue_:
+            current_op = OpManager.get_last()
             if current_op is None:
-                print("No previous operation found. Please specify a new user.")
+                print("No previous running operation found. Please specify a new user.")
                 exit(1)
             else:
-                res_code, target_user = await client.get_user_by_id(int(current_op.user_id))
+                res_code, target_user = await client.get_user_by_id(current_op.user_id)
         elif args.name:
             res_code, target_user = await client.get_user_by_handle(args.name.strip('@'))
         else:
@@ -784,31 +888,34 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
         else:
             break
 
-    if current_op is not None and target_user.id == current_op.user_id:
-        initial_cursor = current_op.cursor
+    if current_op is None:
+        current_op = OpManager.get_or_create_with(target_user)
+    
+    if current_op.done:
+        print(f"Operation for @{target_user.handle} ({target_user.id}) is already done.")
+        exit(0)
 
-    if initial_cursor is None:
+    if current_op.cursor is None:
         print(f"Fetching followers of @{target_user.handle} ({target_user.id})...")
-        OpManager.open(target_user)
     else:
-        current_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
+        specific_blocked_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
         print(f"Continuing previous blocking operation for @{target_user.handle} ({target_user.id})...")
-        print(f"  * Already blocked {current_count} followers out of {target_user.followers_count} ({current_count / target_user.followers_count * 100:.2f}%)")
+        print(f"  * Already blocked {specific_blocked_count} followers out of {target_user.followers_count} ({specific_blocked_count / target_user.followers_count * 100:.2f}%)")
+        print(f"  * Already processed {current_op.count} followers ({current_op.count / target_user.followers_count * 100:.2f}%)")
 
-    total_blocked = 0
-
-    async for status_code, raw_followers, current_cursor in client.fetch_followers(target_user, initial_cursor):
+    async for status_code, raw_followers, current_cursor in client.fetch_mixed_followers(target_user, initial_cursor=current_op.cursor, force_skip_verified=args.skip_premium):
         if await handle_error_code(client, status_code, "Failed to fetch followers"):
             continue
 
         if len(raw_followers) == 0:
-            OpManager.close()
+            OpManager.set_done(target_user)
             block_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
-            print(f"End of the follower list reached, blocked {block_count} users.")
+            print(f"End of the follower list reached, blocked {block_count} new users.")
             break
 
         followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
         if len(followers) == 0:
+            OpManager.update_cursor(target_user, current_cursor)
             continue
 
         if args.verbose:
@@ -825,10 +932,9 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
 
             for uid, follower in list(followers.items()):
                 if uid in results:
-                    status_code, res = results[uid]
+                    status_code, res, _ = results[uid]
                     if status_code == 200:
-                        total_blocked += 1
-                        print(f"  * blocked {follower.id:>19} @{follower.handle:<16} (created on {follower.created_at:%d/%m/%Y} - {follower.activity_count:>6} posts)")
+                        print(f"  * blocked {follower.id:>19} @{follower.handle:<16} (created on {follower.created_at:%d/%m/%Y} - {follower.activity_count:>6} posts) {'[paid]' if follower.verified else ''}")
                         followers.pop(uid)
                     else:
                         error_stack[status_code] = res
@@ -838,7 +944,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             
             await handle_error_stack(client, error_stack)
 
-        OpManager.update_cursor(current_cursor)
+        OpManager.update_cursor_and_count(target_user, current_cursor, len(raw_followers))
 
 async def main():
     print_stats()

@@ -1,4 +1,4 @@
 .vscode
-storage.db
+*.db
 .DS_Store
 plots
