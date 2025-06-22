@@ -602,7 +602,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS running_ops (
             id int not null primary key,
             name text not null,
-            cursor text not null,
+            cursor text null,
             count int not null default 0,
             done int not null default 0
         )
@@ -919,7 +919,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             continue
 
         if args.verbose:
-            print(f"[fw/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor})")
+            print(f"[fw/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}%)")
 
         while len(followers):
             results = { }
@@ -944,6 +944,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             
             await handle_error_stack(client, error_stack)
 
+        current_op.count += len(raw_followers)
         OpManager.update_cursor_and_count(target_user, current_cursor, len(raw_followers))
 
 async def main():
