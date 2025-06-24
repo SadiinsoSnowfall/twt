@@ -204,6 +204,7 @@ class TransactionIdGenerator:
 class BlockReason:
     MATCH_KEYWORD = 'kw'
     SUBSCRIBED_TO = 'fw'
+    BLOCK_LIST = 'bl'
 
 @dataclass
 class TwtCookies:
@@ -462,6 +463,28 @@ class TwtClient:
         else:
             return (r.status_code, None)
         
+    async def get_users_by_ids(self, ids: list[int]) -> AsyncGenerator[tuple[int, list[User]]]:
+        endpoint_url = f'{GQL_API_URL}/OJBgJQIrij6e3cjqQ3Zu1Q/UsersByRestIds'
+        max_batch_size = 200
+
+        for i in range(0, len(ids), max_batch_size):
+            headers = self.build_headers(endpoint_url)
+            params = {
+                'variables': {
+                    'userIds': ids[i:i + max_batch_size],
+                },
+                'features': DEFAULT_FEATURES,
+            }
+
+            r = await self.http.get(endpoint_url, headers=headers, params={k: json.dumps(v) for k, v in params.items()})
+
+            if r.status_code == 200:
+                data = r.json()['data']['users']
+                users = [ self.parse_user(raw['result']) for raw in data if 'result' in raw and raw['result']['__typename'] == 'User' ]
+                yield (r.status_code, users)
+            else:
+                yield (r.status_code, [ ])
+        
     async def _fetch_followers_inner(self, user: User, endpoint: str, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         endpoint_url = f'{GQL_API_URL}/{endpoint}'
 
@@ -491,7 +514,7 @@ class TwtClient:
             entries = [e for e in raw_entries if e['entryId'].startswith('user-')]
             cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
 
-            if len(entries) == 0 or cursor is None:
+            if cursor.endswith('|0'):
                 yield (r.status_code, [ ], None)
                 break
             else:
@@ -513,6 +536,53 @@ class TwtClient:
     
     def fetch_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         return self._fetch_followers_inner(user, 'pd8Tt1qUz1YWrICegqZ8cw/Followers', initial_cursor)
+    
+    async def fetch_own_block_list(self, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        endpoint_url = f'{GQL_API_URL}/wKSrEpYdqj2-VMkH9zPMBg/BlockedAccountsAll'
+
+        params = {
+            'variables': DEFAULT_VARIABLES | {
+                'count': 1000,
+                "includePromotedContent": False
+            },
+            'features': DEFAULT_FEATURES,
+        }
+
+        cursor = initial_cursor
+
+        while True:
+            if cursor:
+                params['variables']['cursor'] = cursor
+
+            headers = self.build_headers(endpoint_url)
+            r = await self.http.get(endpoint_url, headers=headers, params={k: json.dumps(v) for k, v in params.items()})
+
+            if r.status_code >= 400:
+                yield (r.status_code, [ ], None)
+                continue
+
+            data = r.json()
+            raw_entries = find_single_key(data, 'entries')
+            entries = [e for e in raw_entries if e['entryId'].startswith('user-')]
+            cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
+
+            if cursor.endswith('|0'):
+                yield (r.status_code, [ ], None)
+                break
+            else:
+                def get_udata(e: dict) -> dict:
+                    try:
+                        raw = e['content']['itemContent']['user_results']['result']
+                        if raw['__typename'] == 'UserUnavailable':
+                            return None
+                        else:
+                            return self.parse_user(raw)
+                    except KeyError as err:
+                        None
+                
+                entries = [ get_udata(e) for e in entries ]
+                yield (r.status_code, [ u for u in entries if u is not None ], cursor)
+
     
     async def fetch_mixed_followers(self, user: User, initial_cursor: str | None = None, force_skip_verified: bool = False) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         vtag = 'verified+'
@@ -591,10 +661,10 @@ def init_db():
             reason TEXT NOT NULL,
             match TEXT NOT NULL,
             date TEXT NOT NULL,
-            premium INT DEFAULT NULL,
-            creation_date TEXT DEFAULT NULL,
-            posts INT DEFAULT NULL,
-            followers INT DEFAULT NULL
+            premium INT NOT NULL,
+            creation_date TEXT NOT NULL,
+            posts INT NOT NULL,
+            followers INT NOT NULL
         )
     ''')
 
@@ -622,11 +692,28 @@ def save_block(user: User, reason: str, match: str):
     cursor.close()
     local_db.commit()
 
-def get_blocked_count_by(reason: str, match: str) -> int:
+def save_blocks(user: list[User], reason: str, match: str):
+    cursor =  local_db.cursor()
+    cursor.executemany('''
+        INSERT INTO users (id, name, reason, match, premium, creation_date, posts, followers, date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, date('now'))
+    ''', [(u.id, u.handle, reason, match, u.verified, f"{u.created_at:%Y-%m-%d}", u.activity_count, u.followers_count) for u in user])
+    cursor.close()
+
+def get_blocked_count_by_ex(reason: str, match: str) -> int:
     cursor = local_db.cursor()
     cursor.execute('''
         SELECT COUNT(*) FROM users WHERE reason = ? AND match = ?
     ''', (reason, match))
+    count = cursor.fetchone()[0]
+    cursor.close()
+    return count
+
+def get_blocked_count_by(reason: str) -> int:
+    cursor = local_db.cursor()
+    cursor.execute('''
+        SELECT COUNT(*) FROM users WHERE reason = ?
+    ''', (reason,))
     count = cursor.fetchone()[0]
     cursor.close()
     return count
@@ -640,6 +727,56 @@ class RunningOp:
     done: bool
 
 class OpManager:
+    @staticmethod
+    def create_special(name: str, cursor: str | None = None):
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            INSERT INTO running_ops (id, name, cursor)
+            VALUES (?, ?, ?)
+        ''', (0, name, cursor))
+        db_cursor.close()
+        local_db.commit()
+
+        return RunningOp(username=name, user_id=0, cursor=cursor, count=0, done=False)
+    
+    @staticmethod
+    def get_special(name: str) -> RunningOp | None:
+        db_cursor = local_db.cursor()
+        db_cursor.execute('SELECT cursor, count, done FROM running_ops WHERE id = 0 AND name = ?', (name,))
+        row = db_cursor.fetchone()
+        db_cursor.close()
+        if row:
+            cursor, count, done = row
+            return RunningOp(username=name, user_id=0, cursor=cursor, count=count, done=done)
+        else:
+            return None
+
+    @staticmethod
+    def get_or_create_special(name: str) -> RunningOp:
+        op = OpManager.get_special(name)
+        if op is None:
+            op = OpManager.create_special(name)
+
+        return op
+    
+    @staticmethod
+    def close_special(name: str):
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            UPDATE running_ops SET done = 1 WHERE id = 0 AND name = ?
+        ''', (name,))
+        db_cursor.close()
+        local_db.commit()
+
+    @staticmethod
+    def update_special_cursor_and_count(name: str, cursor: str, count: int):
+        db_cursor = local_db.cursor()
+        db_cursor.execute('''
+            UPDATE running_ops SET cursor = ?, count = count + ? WHERE id = 0 AND name = ?
+        ''', (cursor, count, name))
+        db_cursor.close()
+        local_db.commit()
+
     @staticmethod
     def create(user: User, cursor: str | None = None):
         db_cursor = local_db.cursor()
@@ -712,7 +849,7 @@ class OpManager:
     @staticmethod
     def get_last() -> RunningOp | None:
         db_cursor = local_db.cursor()
-        db_cursor.execute('SELECT id, name, cursor, count, done FROM running_ops WHERE done = 0 ORDER BY id DESC LIMIT 1')
+        db_cursor.execute('SELECT id, name, cursor, count, done FROM running_ops WHERE done = 0 and id <> 0 ORDER BY id DESC LIMIT 1')
         row = db_cursor.fetchone()
         db_cursor.close()
 
@@ -814,6 +951,8 @@ fw_params.add_argument('-n', '--name', type=str, help='The target user handle')
 fw_params.add_argument('-i', '--id', type=str, help='The target user ID')
 fw_params.add_argument('-c', '--continue', dest='continue_', action='store_true', help='Continue the previous search/block operation if possible.')
 
+cmd_fetch = cmd.add_parser('fetch', help='Fetch the current block list.')
+
 args = parser.parse_args()
 
 async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
@@ -898,7 +1037,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
     if current_op.cursor is None:
         print(f"Fetching followers of @{target_user.handle} ({target_user.id})...")
     else:
-        specific_blocked_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
+        specific_blocked_count = get_blocked_count_by_ex(BlockReason.SUBSCRIBED_TO, target_user.handle)
         print(f"Continuing previous blocking operation for @{target_user.handle} ({target_user.id})...")
         print(f"  * Already blocked {specific_blocked_count} followers out of {target_user.followers_count} ({specific_blocked_count / target_user.followers_count * 100:.2f}%)")
         print(f"  * Already processed {current_op.count} followers ({current_op.count / target_user.followers_count * 100:.2f}%)")
@@ -908,18 +1047,16 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             continue
 
         if len(raw_followers) == 0:
-            OpManager.set_done(target_user)
-            block_count = get_blocked_count_by(BlockReason.SUBSCRIBED_TO, target_user.handle)
-            print(f"End of the follower list reached, blocked {block_count} new users.")
-            break
+            continue
 
         followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
-        if len(followers) == 0:
-            OpManager.update_cursor(target_user, current_cursor)
-            continue
 
         if args.verbose:
             print(f"[fw/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}%)")
+
+        if len(followers) == 0:
+            OpManager.update_cursor(target_user, current_cursor)
+            continue
 
         while len(followers):
             results = { }
@@ -947,6 +1084,37 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
         current_op.count += len(raw_followers)
         OpManager.update_cursor_and_count(target_user, current_cursor, len(raw_followers))
 
+    OpManager.set_done(target_user)
+    block_count = get_blocked_count_by_ex(BlockReason.SUBSCRIBED_TO, target_user.handle)
+    print(f"End of the follower list reached, blocked {block_count} new users.")
+
+async def cmd_fetch(client: TwtClient):
+    key = 'fetch_blocked_users'
+    op = OpManager.get_or_create_special(key)
+
+    async for status_code, raw_users, current_cursor in client.fetch_own_block_list(initial_cursor=op.cursor):
+        if await handle_error_code(client, status_code, "Failed to fetch followers"):
+            continue
+
+        cursor = local_db.cursor()
+        cursor.execute('SELECT id from users where id in ({})'.format(','.join(str(u.id) for u in raw_users)))
+        existing_ids = { row[0] for row in cursor.fetchall() }
+        cursor.close()
+
+        new_users = [ u for u in raw_users if u.id not in existing_ids ]
+
+        if args.verbose:
+            print(f"[block_list] Fetched {len(new_users)}/{len(raw_users)} new blocked users (cursor: {current_cursor})")
+
+        OpManager.update_special_cursor_and_count(key, current_cursor, len(raw_users))
+
+        if len(new_users) != 0:
+            save_blocks(new_users, BlockReason.BLOCK_LIST, '')
+
+    OpManager.close_special(key)
+    block_count = get_blocked_count_by(BlockReason.BLOCK_LIST)
+    print(f"End of the block list reached, imported {block_count} new users.")
+
 async def main():
     print_stats()
     client = TwtClient(get_cookies())
@@ -956,6 +1124,8 @@ async def main():
         await cmd_kw(client, block_sem)
     elif args.command == 'fw':
         await cmd_fw(client, block_sem)
+    elif args.command == 'fetch':
+        await cmd_fetch(client)
 
 if __name__ == "__main__":
     trio.run(main)

@@ -27,7 +27,7 @@ def fetch_data():
     conn = sqlite3.connect('storage.db')
     cursor = conn.cursor()
 
-    cursor.execute('SELECT id, name, reason, match, date, premium, creation_date, posts, followers FROM users where followers is not null')
+    cursor.execute('SELECT id, name, reason, match, date, premium, creation_date, posts, followers FROM users')
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
