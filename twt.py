@@ -514,7 +514,7 @@ class TwtClient:
             entries = [e for e in raw_entries if e['entryId'].startswith('user-')]
             cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
 
-            if cursor.endswith('|0'):
+            if cursor.startswith('0|'):
                 yield (r.status_code, [ ], None)
                 break
             else:
@@ -566,7 +566,7 @@ class TwtClient:
             entries = [e for e in raw_entries if e['entryId'].startswith('user-')]
             cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
 
-            if cursor.endswith('|0'):
+            if cursor.startswith('0|'):
                 yield (r.status_code, [ ], None)
                 break
             else:
@@ -596,12 +596,14 @@ class TwtClient:
         
         if had_verified and not force_skip_verified:
             async for status_code, raw_followers, cursor in self.fetch_verified_followers(user, initial_cursor):
-                if status_code == 200 and len(raw_followers) == 0:
-                    break
-                elif cursor is None:
+                if cursor is None:
                     yield (status_code, raw_followers, None)
+                elif cursor.startswith('0|'):
+                    break
                 else:
                     yield (status_code, raw_followers, vtag + cursor)
+
+            initial_cursor = None
 
         async for status_code, raw_followers, cursor in self.fetch_followers(user, initial_cursor):
              yield (status_code, raw_followers, cursor)
