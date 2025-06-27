@@ -126,19 +126,6 @@ def get_safe(raw: dict, path: list[str]) -> any:
     return raw
 
 def find_key(obj: any, key: str, ignore: list[str] | None = None) -> list:
-    """
-    Find all values of a given key within a nested dict or list of dicts
-
-    Most data of interest is nested, and sometimes defined by different schemas.
-    It is not worth our time to enumerate all absolute paths to a given key, then update
-    the paths in our parsing functions every time Twitter changes their API.
-    Instead, we recursively search for the key here, then run post-processing functions on the results.
-
-    @param obj: dictionary or list of dictionaries
-    @param key: key to search for
-    @return: list of values
-    """
-
     def helper(obj: any, key: str, L: list) -> list:
         if not obj:
             return L
@@ -514,8 +501,7 @@ class TwtClient:
             entries = [e for e in raw_entries if e['entryId'].startswith('user-')]
             cursor = next((e['content']['value'] for e in raw_entries if e['entryId'].startswith('cursor-bottom-')), None)
 
-            if cursor.startswith('0|'):
-                yield (r.status_code, [ ], None)
+            if cursor.startswith('0|') and len(entries) == 0:
                 break
             else:
                 def get_udata(e: dict) -> dict:
@@ -537,6 +523,33 @@ class TwtClient:
     def fetch_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         return self._fetch_followers_inner(user, 'pd8Tt1qUz1YWrICegqZ8cw/Followers', initial_cursor)
     
+    async def fetch_mixed_followers(self, user: User, initial_cursor: str | None = None, force_skip_verified: bool = False) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
+        vtag = 'verified+'
+        had_verified = False
+        
+        if len(initial_cursor) == 0:
+            initial_cursor = None
+
+        if initial_cursor is None:
+            had_verified = True
+        elif initial_cursor.startswith(vtag):
+            had_verified = True
+            initial_cursor = initial_cursor[len(vtag):]
+        
+        if had_verified and not force_skip_verified:
+            print("verified")
+            async for status_code, raw_followers, cursor in self.fetch_verified_followers(user, initial_cursor):
+                if cursor is None:
+                    yield (status_code, raw_followers, None)
+                else:
+                    yield (status_code, raw_followers, vtag + cursor)
+
+            initial_cursor = None
+
+        print("ok now normal with cursor", initial_cursor)
+        async for status_code, raw_followers, cursor in self.fetch_followers(user, initial_cursor):
+             yield (status_code, raw_followers, cursor)
+
     async def fetch_own_block_list(self, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         endpoint_url = f'{GQL_API_URL}/wKSrEpYdqj2-VMkH9zPMBg/BlockedAccountsAll'
 
@@ -583,30 +596,6 @@ class TwtClient:
                 entries = [ get_udata(e) for e in entries ]
                 yield (r.status_code, [ u for u in entries if u is not None ], cursor)
 
-    
-    async def fetch_mixed_followers(self, user: User, initial_cursor: str | None = None, force_skip_verified: bool = False) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
-        vtag = 'verified+'
-        had_verified = False
-        
-        if initial_cursor is None:
-            had_verified = True
-        elif initial_cursor.startswith(vtag):
-            had_verified = True
-            initial_cursor = initial_cursor[len(vtag):]
-        
-        if had_verified and not force_skip_verified:
-            async for status_code, raw_followers, cursor in self.fetch_verified_followers(user, initial_cursor):
-                if cursor is None:
-                    yield (status_code, raw_followers, None)
-                elif cursor.startswith('0|'):
-                    break
-                else:
-                    yield (status_code, raw_followers, vtag + cursor)
-
-            initial_cursor = None
-
-        async for status_code, raw_followers, cursor in self.fetch_followers(user, initial_cursor):
-             yield (status_code, raw_followers, cursor)
 
 def get_cookies(allows_none: bool = False) -> TwtCookies:
     if FETCH_COOKIES_FROM_BROWSER:
