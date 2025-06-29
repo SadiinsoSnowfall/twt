@@ -537,7 +537,6 @@ class TwtClient:
             initial_cursor = initial_cursor[len(vtag):]
         
         if had_verified and not force_skip_verified:
-            print("verified")
             async for status_code, raw_followers, cursor in self.fetch_verified_followers(user, initial_cursor):
                 if cursor is None:
                     yield (status_code, raw_followers, None)
@@ -546,7 +545,6 @@ class TwtClient:
 
             initial_cursor = None
 
-        print("ok now normal with cursor", initial_cursor)
         async for status_code, raw_followers, cursor in self.fetch_followers(user, initial_cursor):
              yield (status_code, raw_followers, cursor)
 
