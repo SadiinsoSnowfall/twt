@@ -526,11 +526,9 @@ class TwtClient:
     async def fetch_mixed_followers(self, user: User, initial_cursor: str | None = None, force_skip_verified: bool = False) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         vtag = 'verified+'
         had_verified = False
-        
-        if len(initial_cursor) == 0:
-            initial_cursor = None
 
-        if initial_cursor is None:
+        if initial_cursor is None or len(initial_cursor) == 0:
+            initial_cursor = None
             had_verified = True
         elif initial_cursor.startswith(vtag):
             had_verified = True
