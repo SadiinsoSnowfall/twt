@@ -122,7 +122,7 @@ def get_safe(raw: dict, path: list[str]) -> any:
             raw = raw[key]
         else:
             return None
-        
+
     return raw
 
 def find_key(obj: any, key: str, ignore: list[str] | None = None) -> list:
@@ -154,7 +154,7 @@ def find_single_key_opt(obj: any, key: str, ignore: list[str] | None = None) -> 
         return None
     else:
         raise ValueError(f"Expected a single value for key '{key}', but found {len(results)} values")
-    
+
 def find_single_key(obj: any, key: str, ignore: list[str] | None = None) -> dict | None:
     results = find_key(obj, key, ignore)
     if len(results) == 1:
@@ -171,7 +171,7 @@ class TransactionIdGenerator:
             "User-Agent": user_agent,
             "X-Twitter-Active-User": "yes",
             "X-Twitter-Client-Language": "en"}
-            
+
         session = requests.Session()
         session.headers = headers
         response_twit = handle_x_migration(session)
@@ -203,7 +203,7 @@ class TwtCookies:
             'ct0': self.ct0,
             'auth_token': self.auth_token
         }
-    
+
     def is_empty(self) -> bool:
         return not self.ct0 or not self.auth_token
 
@@ -223,7 +223,7 @@ class User:
         if isinstance(other, User):
             return self.id == other.id
         return False
-    
+
     def __hash__(self):
         return hash(self.id)
 
@@ -239,7 +239,7 @@ class Tweet:
         if isinstance(other, Tweet):
             return self.id == other.id
         return False
-    
+
     def __hash__(self):
         return hash(self.id)
 
@@ -264,7 +264,7 @@ class TwtClient:
             'x-twitter-client-language': 'en',
             'x-client-transaction-id': self.tid_generator.generate_tid(url, method),
         }
-    
+
     async def v1(self, path: str, params: dict) -> tuple[int, dict, httpx.Response]:
         url = f'{V1_API_URL}/{path}'
         headers = self.build_headers(url, content_type='application/x-www-form-urlencoded', method='POST')
@@ -291,7 +291,7 @@ class TwtClient:
 
             if not handle:
                 raise ValueError(f"Handle is missing in {raw}")
-            
+
             if not created_at:
                 raise ValueError(f"Created at date is missing in {raw}")
 
@@ -316,9 +316,9 @@ class TwtClient:
                 already_blocked=already_blocked
             )
         except KeyError as e:
-            print(f"Error parsing user data: {e}, raw data: {raw}") 
+            print(f"Error parsing user data: {e}, raw data: {raw}")
             raise e
-            
+
     @staticmethod
     def parse_tweets(entries: list[dict]) -> list[Tweet]:
         tweets = []
@@ -349,9 +349,9 @@ class TwtClient:
             except Exception as e:
                 print(f"Error parsing tweet entry: {e}, entry: {entry}")
                 exit(1)
-        
+
         return tweets
-    
+
     async def await_cookies_update(self):
         if args.ring:
             for  _ in range(3):
@@ -427,7 +427,7 @@ class TwtClient:
                 return (r.status_code, TwtClient.parse_user(data['user']['result']))
         else:
             return (r.status_code, None)
-        
+
     async def get_user_by_id(self, id: int) -> tuple[int, User | None]:
         endpoint_url = f'{GQL_API_URL}/GazOglcBvgLigl3ywt6b3Q/UserByRestId'
         headers = self.build_headers(endpoint_url)
@@ -449,7 +449,7 @@ class TwtClient:
                 return (r.status_code, TwtClient.parse_user(data['user']['result']))
         else:
             return (r.status_code, None)
-        
+
     async def get_users_by_ids(self, ids: list[int]) -> AsyncGenerator[tuple[int, list[User]]]:
         endpoint_url = f'{GQL_API_URL}/OJBgJQIrij6e3cjqQ3Zu1Q/UsersByRestIds'
         max_batch_size = 200
@@ -471,7 +471,7 @@ class TwtClient:
                 yield (r.status_code, users)
             else:
                 yield (r.status_code, [ ])
-        
+
     async def _fetch_followers_inner(self, user: User, endpoint: str, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         endpoint_url = f'{GQL_API_URL}/{endpoint}'
 
@@ -519,10 +519,10 @@ class TwtClient:
 
     def fetch_verified_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         return self._fetch_followers_inner(user, 'qKjNcwA6qZssapgGkylGdA/BlueVerifiedFollowers', initial_cursor)
-    
+
     def fetch_followers(self, user: User, initial_cursor: str | None = None) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         return self._fetch_followers_inner(user, 'pd8Tt1qUz1YWrICegqZ8cw/Followers', initial_cursor)
-    
+
     async def fetch_mixed_followers(self, user: User, initial_cursor: str | None = None, force_skip_verified: bool = False) -> AsyncGenerator[tuple[int, list[User], str | None], None]:
         vtag = 'verified+'
         had_verified = False
@@ -533,7 +533,7 @@ class TwtClient:
         elif initial_cursor.startswith(vtag):
             had_verified = True
             initial_cursor = initial_cursor[len(vtag):]
-        
+
         if had_verified and not force_skip_verified:
             async for status_code, raw_followers, cursor in self.fetch_verified_followers(user, initial_cursor):
                 if cursor is None:
@@ -588,7 +588,7 @@ class TwtClient:
                             return self.parse_user(raw)
                     except KeyError as err:
                         None
-                
+
                 entries = [ get_udata(e) for e in entries ]
                 yield (r.status_code, [ u for u in entries if u is not None ], cursor)
 
@@ -601,7 +601,7 @@ def get_cookies(allows_none: bool = False) -> TwtCookies:
             'edge': browser_cookie3.edge,
             'firefox': browser_cookie3.firefox,
         }
-        
+
         try:
             if PREFFERED_BROWSER in browsers:
                 auth_token = None
@@ -640,7 +640,7 @@ def init_db():
     db_path = 'storage.db'
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY NOT NULL,
@@ -725,7 +725,7 @@ class OpManager:
         local_db.commit()
 
         return RunningOp(username=name, user_id=0, cursor=cursor, count=0, done=False)
-    
+
     @staticmethod
     def get_special(name: str) -> RunningOp | None:
         db_cursor = local_db.cursor()
@@ -745,7 +745,7 @@ class OpManager:
             op = OpManager.create_special(name)
 
         return op
-    
+
     @staticmethod
     def close_special(name: str):
         db_cursor = local_db.cursor()
@@ -824,7 +824,7 @@ class OpManager:
             return RunningOp(username=user.handle, user_id=user.id, cursor=cursor, count=count, done=done)
         else:
             return None
-        
+
     @staticmethod
     def get_or_create_with(user: User) -> RunningOp:
         op = OpManager.get_with(user)
@@ -860,7 +860,7 @@ def handle_error_code_internal(status_code: int, error: str):
 
 async def handle_error_code(client: TwtClient, status_code: int, error: str) -> bool:
     if status_code == 429:
-        print("--- Rate limit exceeded, waiting a bit...") 
+        print("--- Rate limit exceeded, waiting a bit...")
         await trio.sleep(THROTTLE_TIMEOUT)
         return True
     elif (status_code == 401 or status_code == 403):
@@ -894,7 +894,7 @@ async def handle_error_stack(client: TwtClient, error_stack: dict[int, str]):
         print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout [waiting for cookies update]")
         await client.await_cookies_update()
     elif should_wait:
-        print("--- Rate limit exceeded, waiting a bit...") 
+        print("--- Rate limit exceeded, waiting a bit...")
         await trio.sleep(THROTTLE_TIMEOUT)
 
 async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, results: dict, reason: str, match: str):
@@ -982,9 +982,9 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
                     else:
                         print(f"Error: No task result for user {author.handle} (ID: {author_id})")
                         exit(1)
-                
+
                 await handle_error_stack(client, error_stack)
-    
+
     if total_blocked > 0:
         print(f"\nBlocked {total_blocked} users using {total_search} search call.")
 
@@ -1016,7 +1016,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
 
     if current_op is None:
         current_op = OpManager.get_or_create_with(target_user)
-    
+
     if current_op.done:
         print(f"Operation for @{target_user.handle} ({target_user.id}) is already done.")
         exit(0)
@@ -1039,10 +1039,11 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
         followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
 
         if args.verbose:
-            print(f"[fw/{target_user.handle}] Fetched {len(followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}%)")
+            print(f"[fw/{target_user.handle}] Fetched {len(followers)}/{len(raw_followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}%)")
 
         if len(followers) == 0:
-            OpManager.update_cursor(target_user, current_cursor)
+            current_op.count += len(raw_followers)
+            OpManager.update_cursor_and_count(target_user, current_cursor, len(raw_followers))
             continue
 
         while len(followers):
@@ -1051,7 +1052,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             async with trio.open_nursery() as nursery:
                 for follower in followers.values():
                     nursery.start_soon(block_task, client, queue, follower, results, BlockReason.SUBSCRIBED_TO, target_user.handle)
-            
+
             error_stack = { }
 
             for uid, follower in list(followers.items()):
@@ -1065,7 +1066,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
                 else:
                     print(f"Error: No task result for user {follower.handle} (ID: {uid})")
                     exit(1)
-            
+
             await handle_error_stack(client, error_stack)
 
         current_op.count += len(raw_followers)
