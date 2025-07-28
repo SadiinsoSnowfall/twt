@@ -8,6 +8,8 @@ import json
 import browser_cookie3
 import datetime
 import argparse
+import subprocess
+import sys
 from urllib.parse import urlencode, urlparse
 from dataclasses import dataclass
 from collections.abc import AsyncGenerator
@@ -15,7 +17,7 @@ from bs4 import BeautifulSoup
 from x_client_transaction.utils import handle_x_migration, get_ondemand_file_url
 from x_client_transaction import ClientTransaction
 
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
 
 MAX_BLOCK_QUEUE_SIZE = 100
 
@@ -357,6 +359,9 @@ class TwtClient:
             for  _ in range(3):
                 print('\a', end='', flush=True)
                 await trio.sleep(0.1)
+
+        # Open browser if requested
+        open_browser()
 
         while True:
             nc = get_cookies(allows_none=True)
@@ -892,6 +897,8 @@ async def handle_error_stack(client: TwtClient, error_stack: dict[int, str]):
 
     if should_refresh_cookies:
         print(f"--- Unauthorized access, please re-authenticate: https://x.com/logout [waiting for cookies update]")
+        if args.open:
+            open_browser()
         await client.await_cookies_update()
     elif should_wait:
         print("--- Rate limit exceeded, waiting a bit...")
@@ -901,10 +908,6 @@ async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, resul
     async with queue:
         try:
             status_code, res, raw = await client.block(user)
-
-            if status_code == 200:
-                save_block(user, reason, match)
-
             results[user.id] = [status_code, res, raw]
         except Exception as e:
             results[user.id] = [400, str(e), None]
@@ -922,9 +925,40 @@ def print_stats():
 
     print(f"{daily_count} users blocked today (out of {total_count} total)")
 
+def open_browser():
+    url = "https://x.com/logout"
+
+    # Browser commands for different platforms and browsers
+    browser_commands = {
+        'darwin': {  # macOS
+            'safari': ['open', '-a', 'Safari', url],
+            'chrome': ['open', '-a', 'Google Chrome', url],
+            'firefox': ['open', '-a', 'Firefox', url],
+            'edge': ['open', '-a', 'Microsoft Edge', url],
+        },
+        'linux': {
+            'chrome': ['google-chrome', url],
+            'firefox': ['firefox', url],
+            'edge': ['microsoft-edge', url],
+        },
+        'win32': {
+            'chrome': ['start', 'chrome', url],
+            'firefox': ['start', 'firefox', url],
+            'edge': ['start', 'msedge', url],
+        }
+    }
+
+    if sys.platform in browser_commands and (cmd := browser_commands[sys.platform].get(PREFFERED_BROWSER.lower())):
+        try:
+            subprocess.run(cmd, check=False)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            print(f"Failed to open {PREFFERED_BROWSER}, trying default browser...")
+
+
 parser = argparse.ArgumentParser(description="Block users on Twitter based on search keywords.")
 parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output.')
 parser.add_argument('-r', '--ring', action='store_true', help='Ring when user action is required.')
+parser.add_argument('-o', '--open', action='store_true', help='Open the browser when requiering re-authentication.')
 
 cmd = parser.add_subparsers(dest='command', required=True)
 
@@ -969,6 +1003,7 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
                         nursery.start_soon(block_task, client, queue, author, results, BlockReason.MATCH_KEYWORD, args.query)
 
                 error_stack = { }
+                processed_list = [ ]
 
                 for author_id, author in list(authors.items()):
                     if author_id in results:
@@ -976,12 +1011,15 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
                         if status_code == 200:
                             total_blocked += 1
                             print(f"  * blocked {author.id:>19} @{author.handle:<16} (created on {author.created_at:%d/%m/%Y} - {author.activity_count:>6} posts)")
-                            authors.pop(author_id)
+                            processed_list.append(authors.pop(author_id))
                         else:
                             error_stack[status_code] = res
                     else:
                         print(f"Error: No task result for user {author.handle} (ID: {author_id})")
                         exit(1)
+
+                if len(processed_list) > 0:
+                    save_blocks(processed_list, BlockReason.MATCH_KEYWORD, args.query)
 
                 await handle_error_stack(client, error_stack)
 
@@ -1022,6 +1060,7 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
         exit(0)
 
     if current_op.cursor is None:
+        specific_blocked_count = 0
         print(f"Fetching followers of @{target_user.handle} ({target_user.id})...")
     else:
         specific_blocked_count = get_blocked_count_by_ex(BlockReason.SUBSCRIBED_TO, target_user.handle)
@@ -1037,11 +1076,13 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
             continue
 
         followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
+        new_followers_count = len(followers)
 
         if args.verbose:
-            print(f"[fw/{target_user.handle}] Fetched {len(followers)}/{len(raw_followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}%)")
+            already_blocked_estimate = (current_op.count - specific_blocked_count) / current_op.count * 100 if current_op.count > 0 else 0
+            print(f"[fw/{target_user.handle}] Fetched {new_followers_count}/{len(raw_followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}% done - {already_blocked_estimate:.2f}% AB)")
 
-        if len(followers) == 0:
+        if new_followers_count == 0:
             current_op.count += len(raw_followers)
             OpManager.update_cursor_and_count(target_user, current_cursor, len(raw_followers))
             continue
@@ -1054,21 +1095,26 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
                     nursery.start_soon(block_task, client, queue, follower, results, BlockReason.SUBSCRIBED_TO, target_user.handle)
 
             error_stack = { }
+            processed_list = [ ]
 
             for uid, follower in list(followers.items()):
                 if uid in results:
                     status_code, res, _ = results[uid]
                     if status_code == 200:
                         print(f"  * blocked {follower.id:>19} @{follower.handle:<16} (created on {follower.created_at:%d/%m/%Y} - {follower.activity_count:>6} posts) {'[paid]' if follower.verified else ''}")
-                        followers.pop(uid)
+                        processed_list.append(followers.pop(uid))
                     else:
                         error_stack[status_code] = res
                 else:
                     print(f"Error: No task result for user {follower.handle} (ID: {uid})")
                     exit(1)
 
+            if len(processed_list) > 0:
+                save_blocks(processed_list, BlockReason.SUBSCRIBED_TO, target_user.handle)
+
             await handle_error_stack(client, error_stack)
 
+        specific_blocked_count += new_followers_count
         current_op.count += len(raw_followers)
         OpManager.update_cursor_and_count(target_user, current_cursor, len(raw_followers))
 
