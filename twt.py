@@ -220,6 +220,8 @@ class User:
     activity_count: int
     followers_count: int
     already_blocked: bool
+    following_op: bool
+    followed_by_op: bool
 
     def __eq__(self, other):
         if isinstance(other, User):
@@ -283,6 +285,9 @@ class TwtClient:
     async def block(self, user: User) -> tuple[int, dict, httpx.Response]:
         return await self.v1('blocks/create.json', { 'user_id': user.id })
 
+    async def unblock(self, user: User) -> tuple[int, dict, httpx.Response]:
+        return await self.v1('blocks/destroy.json', { 'user_id': user.id })
+
     @staticmethod
     def parse_user(raw: dict) -> User:
         try:
@@ -300,8 +305,12 @@ class TwtClient:
             if 'relationship_perspectives' in raw:
                 tmp = raw['relationship_perspectives']
                 already_blocked = tmp['blocking'] if 'blocking' in tmp else False
+                following_op = tmp['followed_by'] if 'followed_by' in tmp else False
+                followed_by_op = tmp['following'] if 'following' in tmp else False
             else:
                 already_blocked = raw['legacy']['blocking'] if 'legacy' in raw and 'blocking' in raw['legacy'] else False
+                following_op = raw['legacy']['followed_by'] if 'legacy' in raw and 'followed_by' in raw['legacy'] else False
+                followed_by_op = raw['legacy']['following'] if 'legacy' in raw and 'following' in raw['legacy'] else False
 
             return User(
                 id=int(raw['rest_id']),
@@ -315,7 +324,9 @@ class TwtClient:
                 ),
                 activity_count=int(raw['legacy']['statuses_count']),
                 followers_count=int(raw['legacy']['followers_count']),
-                already_blocked=already_blocked
+                already_blocked=already_blocked,
+                following_op=following_op,
+                followed_by_op=followed_by_op
             )
         except KeyError as e:
             print(f"Error parsing user data: {e}, raw data: {raw}")
@@ -701,6 +712,15 @@ def get_blocked_count_by_ex(reason: str, match: str) -> int:
     cursor.close()
     return count
 
+def get_blocked_count_by_match(match: str) -> int:
+    cursor = local_db.cursor()
+    cursor.execute('''
+        SELECT COUNT(*) FROM users WHERE match = ?
+    ''', (match, ))
+    count = cursor.fetchone()[0]
+    cursor.close()
+    return count
+
 def get_blocked_count_by(reason: str) -> int:
     cursor = local_db.cursor()
     cursor.execute('''
@@ -912,6 +932,14 @@ async def block_task(client: TwtClient, queue: trio.Semaphore, user: User, resul
         except Exception as e:
             results[user.id] = [400, str(e), None]
 
+async def unblock_task(client: TwtClient, queue: trio.Semaphore, user: User, results: dict):
+    async with queue:
+        try:
+            status_code, res, raw = await client.unblock(user)
+            results[user.id] = [status_code, res, raw]
+        except Exception as e:
+            results[user.id] = [400, str(e), None]
+
 def print_stats():
     cursor = local_db.cursor()
 
@@ -974,6 +1002,9 @@ fw_params.add_argument('-c', '--continue', dest='continue_', action='store_true'
 
 cmd_fetch = cmd.add_parser('fetch', help='Fetch the current block list.')
 
+cmd_unblock = cmd.add_parser('unblock', help='Unblock users based on a keyword search or follower name.')
+cmd_unblock.add_argument('query', type=str, help='The keyword/name to search for users to unblock.')
+
 args = parser.parse_args()
 
 async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
@@ -987,13 +1018,20 @@ async def cmd_kw(client: TwtClient, queue: trio.Semaphore):
                 continue
 
             total_search += 1
-            authors = { tweet.author.id: tweet.author for tweet in tweets if tweet.author.already_blocked is False }
+            should_skip = lambda u: u.following_op or u.followed_by_op
+            all_authors = { tweet.author.id: tweet.author for tweet in tweets if not tweet.author.already_blocked }
+            skipped_authors = { aid: a for aid, a in all_authors.items() if should_skip(a) }
+            authors = { aid: a for aid, a in all_authors.items() if not should_skip(a) }
 
             if len(authors) == 0:
                 continue
 
             if args.verbose:
                 print(f"[kw/{category}] Fetched {len(authors)} new tweet authors")
+                if len(skipped_authors) > 0:
+                    print(f"[kw/{category}] Skipped {len(skipped_authors)} authors due to mutual follow relationship :")
+                    for author in skipped_authors.values():
+                        print(f"  * skipped {author.id:>19} @{author.handle:<16} (created on {author.created_at:%d/%m/%Y} - {author.activity_count:>6} posts) {'[paid]' if author.verified else ''}")
 
             while len(authors):
                 results = { }
@@ -1075,12 +1113,19 @@ async def cmd_fw(client: TwtClient, queue: trio.Semaphore):
         if len(raw_followers) == 0:
             continue
 
-        followers = { follower.id: follower for follower in raw_followers if follower.already_blocked is False }
+        should_skip = lambda u: u.following_op or u.followed_by_op
+        all_followers = { follower.id: follower for follower in raw_followers if not follower.already_blocked }
+        skipped_followers = { fid: f for fid, f in all_followers.items() if should_skip(f) }
+        followers = { fid: f for fid, f in all_followers.items() if not should_skip(f) }
         new_followers_count = len(followers)
 
         if args.verbose:
             already_blocked_estimate = (current_op.count - specific_blocked_count) / current_op.count * 100 if current_op.count > 0 else 0
             print(f"[fw/{target_user.handle}] Fetched {new_followers_count}/{len(raw_followers)} new followers (cursor: {current_cursor}) ({current_op.count / target_user.followers_count * 100:.2f}% done - {already_blocked_estimate:.2f}% AB)")
+            if len(skipped_followers) > 0:
+                print(f"[fw/{target_user.handle}] Skipped {len(skipped_followers)} followers due to mutual follow relationship :")
+                for follower in skipped_followers.values():
+                    print(f"  * skipped {follower.id:>19} @{follower.handle:<16} (created on {follower.created_at:%d/%m/%Y} - {follower.activity_count:>6} posts) {'[paid]' if follower.verified else ''}")
 
         if new_followers_count == 0:
             current_op.count += len(raw_followers)
@@ -1149,6 +1194,55 @@ async def cmd_fetch(client: TwtClient):
     block_count = get_blocked_count_by(BlockReason.BLOCK_LIST)
     print(f"End of the block list reached, imported {block_count} new users.")
 
+async def cmd_unblock(client: TwtClient):
+    match_count = get_blocked_count_by_match(args.query)
+    print(f"Unblocking {match_count} users matching '{args.query}'...")
+
+    while True:
+        cursor = local_db.cursor()
+        cursor.execute('''
+            SELECT id, name, premium, creation_date, posts, followers FROM users
+            WHERE match = ? LIMIT 100
+        ''', (args.query,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            break
+
+        users = [User(id=row[0],
+                        handle=row[1],
+                        username=row[1],
+                        description='',
+                        verified=bool(row[2]),
+                        created_at=datetime.datetime.strptime(row[3], '%Y-%m-%d'),
+                        activity_count=row[4],
+                        followers_count=row[5],
+                        already_blocked=True,
+                        followed_by_op=False,
+                        following_op=False,
+                    ) for row in rows]
+
+        results = { }
+        async with trio.open_nursery() as nursery:
+            for user in users:
+                nursery.start_soon(unblock_task, client, trio.Semaphore(MAX_BLOCK_QUEUE_SIZE), user, results)
+
+        error_stack = { }
+        user_dict = {u.id: u for u in users}
+        for uid, res in results.items():
+            status_code, raw, _ = res
+            if status_code == 200:
+                user = user_dict[uid]
+                print(f"  * unblocked {user.id:>19} @{user.handle:<16} (created on {user.created_at:%d/%m/%Y} - {user.activity_count:>6} posts) {'[paid]' if user.verified else ''}")
+                cursor.execute('DELETE FROM users WHERE id = ?', (uid,))
+            else:
+                error_stack[status_code] = raw
+
+        cursor.close()
+        local_db.commit()
+
+        await handle_error_stack(client, error_stack)
+
 async def main():
     print_stats()
     client = TwtClient(get_cookies())
@@ -1160,6 +1254,8 @@ async def main():
         await cmd_fw(client, block_sem)
     elif args.command == 'fetch':
         await cmd_fetch(client)
+    elif args.command == 'unblock':
+        await cmd_unblock(client)
 
 if __name__ == "__main__":
     trio.run(main)
